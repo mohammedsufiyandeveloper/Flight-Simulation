@@ -56,6 +56,9 @@ const COLOR = {
   terminal:  new THREE.Color("#9fe6b8")
 };
 
+/** Golden fairy dust, sprinkled behind moving butterflies. */
+const FAIRY_DUST_COLOR = new THREE.Color("#ffd27a");
+
 /* =================================================================
    2 · AIRLINE + AIRPORT DATA
    ================================================================= */
@@ -270,6 +273,7 @@ const WING_FRAG = /* glsl */`
   // colour is a tint through that glass, never a replacement for it.
   const vec3 DEEP = vec3(0.05, 0.16, 0.72);   // sapphire, wing edges
   const vec3 CYAN = vec3(0.22, 0.80, 1.00);   // electric core, near the body
+  const vec3 GOLD = vec3(1.00, 0.80, 0.38);   // warm fairy-light at the thorax
 
   // Polar silhouette of a butterfly wing pair.
   float wingField(float r, float t){
@@ -308,14 +312,18 @@ const WING_FRAG = /* glsl */`
     // livery tint, strongest out on the wing where it reads against the foliage
     color = mix(color, uColor, uTint * (0.26 + 0.34 * radial));
 
-    // inner glow — the light source lives at the thorax
+    // inner glow — the light source lives at the thorax; a warm gold core
+    // sits under the electric cyan so the wing reads as lit from within,
+    // closer to a firefly than a neon sign.
     color += CYAN * 0.42 * pow(1.0 - radial, 3.0);
+    color += GOLD * 0.38 * pow(1.0 - radial, 5.0);
 
     // radiating veins, darkened glass between the ribs
     float vein = smoothstep(0.86, 1.0, abs(sin(t * 7.0 + 0.4)));
     color = mix(color, color * 0.55 + CYAN * 0.10, vein * 0.30 * inside);
 
-    // star speckles, scattered and biased toward the wing edges
+    // star speckles, scattered and biased toward the wing edges — warm
+    // white/gold so they read as fairy dust rather than frost
     vec2 grid  = uv * 26.0 + uSeed * 13.0;
     vec2 cell  = floor(grid);
     float h    = hash21(cell);
@@ -323,10 +331,19 @@ const WING_FRAG = /* glsl */`
     float star = smoothstep(0.17, 0.0, length(fract(grid) - 0.5 - jitter * 0.6))
                * step(0.83, h);
     float twinkle = 0.55 + 0.45 * sin(uTime * 2.6 + h * 30.0);
-    color += vec3(0.80, 0.95, 1.0) * star * twinkle * smoothstep(0.25, 0.95, radial) * 1.2;
+    vec3 speckle = mix(vec3(1.0, 0.86, 0.55), vec3(1.0, 1.0, 1.0), h);
+    color += speckle * star * twinkle * smoothstep(0.25, 0.95, radial) * 1.4;
 
-    // bright rim light hugging the silhouette
-    color += mix(CYAN, vec3(1.0), 0.35) * pow(rim, 1.6) * 0.85;
+    // tiny shimmering dots hugging the wing border — small, fast, gold
+    vec2 grid2 = uv * 44.0 + uSeed * 27.0;
+    vec2 cell2 = floor(grid2);
+    float h2   = hash21(cell2 + 9.2);
+    float star2 = smoothstep(0.14, 0.0, length(fract(grid2) - 0.5)) * step(0.90, h2);
+    float twinkle2 = 0.5 + 0.5 * sin(uTime * 3.4 + h2 * 40.0);
+    color += vec3(1.0, 0.88, 0.55) * star2 * twinkle2 * pow(rim, 1.3) * 1.5;
+
+    // bright rim light hugging the silhouette, warmed with gold
+    color += mix(mix(CYAN, GOLD, 0.5), vec3(1.0), 0.4) * pow(rim, 1.6) * 1.05;
 
     // slow iridescent shimmer
     float sh = uTime * 0.9 + radial * 5.0 + uSeed * 6.0;
@@ -388,6 +405,8 @@ const GARDEN_FRAG = /* glsl */`
   uniform float uMaster;          // global intro reveal
   uniform float uBreath;          // 0..1 organic swell
   uniform float uActivity;        // 0..1 how busy the airport is
+  uniform float uWaveMotion;      // 0/1 — leaf/petal UV displacement (off under reduced motion)
+  uniform float uGlowMotion;      // 0..1 — brightness/glow breathing amplitude (stays on, just gentler)
 
   uniform vec2  uTerminal;
   uniform vec2  uGatePos[6];
@@ -396,27 +415,100 @@ const GARDEN_FRAG = /* glsl */`
 
   varying vec2 vUv;
 
+  const vec3 GOLD = vec3(1.00, 0.82, 0.45);
+
+  // cheap hash, used only to stagger clump timing — never to distort geometry
+  float hash21(vec2 p){
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+  }
+
   void main(){
     // world-space position on the plane, so every radius below is in the same
     // units as the gates and the holding ring
     vec2 wp = (vUv - 0.5) * uSize;
 
-    // --- ambient wind shimmer -------------------------------------------
-    // Two incommensurate sine pairs stand in for noise. The displacement is
-    // deliberately sub-pixel (~0.15% of UV): the foliage should feel like it
-    // is breathing in a breeze, never like it is being warped.
-    float n = sin(wp.x * 3.1 + uTime * 0.35) * sin(wp.y * 2.7 - uTime * 0.28)
-            + 0.5 * sin(wp.x * 6.3 - uTime * 0.21) * sin(wp.y * 5.1 + uTime * 0.33);
-    vec2 uv = vUv + vec2(n, n * 0.7) * 0.0016 * uMaster;
+    // --- region masks -------------------------------------------------
+    // Sample the artwork undisturbed first, then decide which pixels are
+    // allowed to move or glow at all. Every mask below is explicitly
+    // multiplied down to zero on the near-white frame and the near-black
+    // void, so neither can ever pick up displacement or brightening —
+    // no matter how the thresholds above are tuned later.
+    vec3 rawCol = texture2D(uMap, vUv).rgb;
+    float luminance = dot(rawCol, vec3(0.299, 0.587, 0.114));
+    float maxc = max(rawCol.r, max(rawCol.g, rawCol.b));
+    float minc = min(rawCol.r, min(rawCol.g, rawCol.b));
+    float saturation = maxc - minc;
+    float greenness = rawCol.g - max(rawCol.r, rawCol.b);
+
+    // near-white shadow-box frame: bright and nearly colourless
+    float frameMask = smoothstep(0.80, 0.92, luminance)
+                     * (1.0 - smoothstep(0.04, 0.14, saturation));
+    // near-black void behind the planting
+    float bgMask = 1.0 - smoothstep(0.02, 0.09, luminance);
+    float protect = (1.0 - frameMask) * (1.0 - bgMask);
+
+    // leaf/foliage: green-dominant, mid-luminance
+    float leafMask = smoothstep(0.015, 0.09, greenness)
+                    * smoothstep(0.94, 0.55, luminance)
+                    * protect;
+
+    // petals/flower centre: bright and saturated, but not green — colour
+    // agnostic on purpose so it follows whatever bloom is painted into the
+    // artwork rather than a hard-coded hue
+    float petalMask = smoothstep(0.22, 0.52, luminance)
+                     * smoothstep(0.08, 0.22, saturation)
+                     * (1.0 - smoothstep(0.0, 0.05, greenness))
+                     * protect;
+
+    // --- breeze field, foliage + a whisper on petals -----------------------
+    // Per-clump phase offset (from a coarse hash of world position) keeps
+    // neighbouring leaves from swaying in lockstep — the wind moves through
+    // the planting rather than the whole sheet nodding at once.
+    float clump = hash21(floor(wp * 3.2));
+    float phase = clump * 6.283185;
+
+    float sway    = sin(uTime * 0.55 + wp.x * 1.4 + phase) * 0.6
+                   + sin(uTime * 0.92 + wp.x * 3.6 - phase * 0.5) * 0.4;
+    float breathe = sin(uTime * 0.40 + wp.y * 1.1 + phase * 0.7) * 0.5
+                   + sin(uTime * 0.23 + wp.x * 0.6 + wp.y * 0.9 + phase) * 0.5;
+    float ripple  = sin(wp.x * 6.3 - uTime * 0.8 + phase) * sin(wp.y * 5.1 + uTime * 0.65 - phase * 0.3);
+
+    vec2 breeze = vec2(sway * 0.65 + ripple * 0.35, breathe * 0.55 + ripple * 0.25);
+
+    // leaves flow with the full breeze; petals barely move — they breathe
+    // and glow rather than bend
+    float waveWeight = leafMask + petalMask * 0.30;
+    vec2 uv = vUv + breeze * 0.0013 * uMaster * uWaveMotion * waveWeight;
 
     vec3 col = texture2D(uMap, uv).rgb;
 
-    // --- drifting highlight / shadow -------------------------------------
-    // A slow diagonal band of moonlight crossing the planting. It only ever
-    // *darkens*: the white frame sits just under the bloom threshold, so even
-    // a 6% lift there turns the whole shadow box into a milky halo.
+    // --- leaf brightness shimmer --------------------------------------------
+    // Slow, incommensurate sines keyed off world position and clump phase so
+    // the swell never reads as a metronome; gated by leafMask so the frame
+    // never brightens.
+    float leafBreath = sin(wp.x * 1.3 + uTime * 0.22 + phase) * sin(wp.y * 1.7 - uTime * 0.17)
+                      + 0.5 * sin(wp.x * 2.9 - uTime * 0.31 + phase + 1.7);
+    col *= 1.0 + leafBreath * 0.05 * leafMask * uMaster * uGlowMotion;
+
+    // --- petal breathing + warm life pulse ----------------------------------
+    // Flowers stay still and instead swell gently and warm through, like
+    // light moving under the petal surface.
+    float petalBreath = sin(uTime * 0.35 + wp.x * 0.8 + wp.y * 0.6) * 0.5
+                       + sin(uTime * 0.19 + wp.y * 1.3 - wp.x * 0.4 + 1.1) * 0.5;
+    col *= 1.0 + petalBreath * 0.045 * petalMask * uMaster * uGlowMotion;
+
+    float warmPulse = 0.5 + 0.5 * sin(uTime * 0.17 + wp.x * 0.4 + wp.y * 0.3);
+    col += GOLD * warmPulse * 0.035 * petalMask * uMaster * uGlowMotion;
+
+    // --- drifting highlight / shadow, foliage + petals only -------------------
+    // A slow diagonal band of moonlight crossing the planting. Multiplying by
+    // (leafMask + petalMask) instead of applying it globally keeps the frame
+    // and the void pinned at their true pixel values.
     float band = 0.5 + 0.5 * sin(wp.x * 0.55 + wp.y * 0.42 + uTime * 0.13);
-    col *= mix(0.90, 1.0, band);
+    float bandMask = clamp(leafMask + petalMask, 0.0, 1.0);
+    col *= mix(1.0, mix(0.90, 1.0, band), bandMask * uGlowMotion);
 
     // --- Terminal Bloom breathing ----------------------------------------
     // Luminance swell centred on the flower, stronger when traffic is heavy.
@@ -464,6 +556,8 @@ class LivingGarden {
         uMaster: { value: 0 },
         uBreath: { value: 0 },
         uActivity: { value: 0 },
+        uWaveMotion: { value: REDUCED_MOTION ? 0 : 1 },
+        uGlowMotion: { value: REDUCED_MOTION ? 0.35 : 1 },
         uTerminal: { value: new THREE.Vector2(TERMINAL.x, TERMINAL.y) },
         uGatePos: { value: gates.map((g) => new THREE.Vector2(g.position.x, g.position.y)) },
         uGateColor: { value: gates.map(() => new THREE.Color(0, 0, 0)) },
@@ -1214,14 +1308,33 @@ const motes = (() => {
   const kinds = new Float32Array(MOTE_COUNT);
   const drift = new Float32Array(MOTE_COUNT * 2);
 
-  for (let i = 0; i < MOTE_COUNT; i++) {
-    // keep the sway inside the frame's inner opening
-    positions[i * 3 + 0] = rand(-GARDEN.innerX + 0.12, GARDEN.innerX - 0.12);
-    positions[i * 3 + 1] = rand(-GARDEN.innerY, GARDEN.innerY);
-    positions[i * 3 + 2] = rand(0.32, 1.05);
+  // a share of the field clusters near the flower instead of scattering
+  // uniformly — the "tiny golden dust motes near the garden centre" the
+  // living-garden brief asks for, reusing this pooled system rather than
+  // standing up a second particle system.
+  const TERMINAL_MOTE_SHARE = 0.22;
+  const terminalCount = Math.round(MOTE_COUNT * TERMINAL_MOTE_SHARE);
 
-    seeds[i] = Math.random();
-    kinds[i] = Math.random() < FIREFLY_SHARE ? 1 : 0;
+  for (let i = 0; i < MOTE_COUNT; i++) {
+    const nearTerminal = i < terminalCount;
+
+    if (nearTerminal) {
+      const a = rand(0, Math.PI * 2);
+      const r = Math.pow(Math.random(), 0.5) * 0.62;   // denser toward the centre
+      positions[i * 3 + 0] = TERMINAL.x + Math.cos(a) * r;
+      positions[i * 3 + 1] = TERMINAL.y + Math.sin(a) * r;
+      positions[i * 3 + 2] = rand(0.30, 0.70);
+    } else {
+      // keep the sway inside the frame's inner opening
+      positions[i * 3 + 0] = rand(-GARDEN.innerX + 0.12, GARDEN.innerX - 0.12);
+      positions[i * 3 + 1] = rand(-GARDEN.innerY, GARDEN.innerY);
+      positions[i * 3 + 2] = rand(0.32, 1.05);
+    }
+
+    // seeds below 0.6 read as the warm/gold pollen colour in MOTE_VERT, so
+    // pinning the terminal cluster below that keeps it reliably golden
+    seeds[i] = nearTerminal ? rand(0, 0.55) : Math.random();
+    kinds[i] = nearTerminal ? 0 : (Math.random() < FIREFLY_SHARE ? 1 : 0);
 
     drift[i * 2 + 0] = rand(-0.05, 0.05);
     drift[i * 2 + 1] = kinds[i] ? rand(0.004, 0.016) : rand(0.010, 0.048);
@@ -1488,7 +1601,7 @@ class TrailRibbon {
 
       // taper: narrow at the butterfly, swelling just behind it, gone at the tail
       const w = width * Math.pow(1 - life, 0.70) * (i === 0 ? 0.45 : 1);
-      const fade = Math.pow(1 - life, 1.85) * this.intensity * this.gain * 0.70 * master;
+      const fade = Math.pow(1 - life, 1.85) * this.intensity * this.gain * 0.84 * master;
 
       // turn blue fast: the near-white head must be a glint, not the whole ribbon
       this._c.copy(this.head).lerp(this.tail, Math.pow(life, 0.40));
@@ -1608,6 +1721,7 @@ class Butterfly {
     this.holdTimer = 0;
     this.dwellTimer = 0;
     this.boardTimer = 0;
+    this.dustTimer = rand(0, 0.15);
 
     this._tangent = new THREE.Vector3(1, 0, 0);
     this._prevAngle = 0;
@@ -1695,6 +1809,22 @@ class Butterfly {
     this.glow.position.z = -0.01;
     this.glow.renderOrder = 9;
     this.mesh.add(this.glow);
+
+    // warm golden core glow at the thorax — the "magic" that reads even when
+    // the butterfly is small on screen, layered in front of the airline halo
+    this.coreGlowMat = new THREE.SpriteMaterial({
+      map: GLOW_TEX,
+      color: new THREE.Color(0xffd27a),
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    this.coreGlow = new THREE.Sprite(this.coreGlowMat);
+    this.coreGlow.scale.setScalar(0.15);
+    this.coreGlow.position.z = 0.015;
+    this.coreGlow.renderOrder = 12;
+    this.mesh.add(this.coreGlow);
 
     // invisible, generously sized hit target for hover / tap
     this.pickMat = new THREE.SpriteMaterial({ opacity: 0, transparent: true, depthWrite: false });
@@ -1873,6 +2003,16 @@ class Butterfly {
 
     const moving = this.speed > 0.05;
     this.trail.update(this.position, moving && this.opacity > 0.2, master);
+
+    // golden fairy dust, sprinkled sparingly along the flight path — skipped
+    // under reduced motion, which keeps the glow but drops the extra particles
+    if (!REDUCED_MOTION && moving && this.opacity > 0.3) {
+      this.dustTimer -= dt;
+      if (this.dustTimer <= 0) {
+        this.dustTimer = rand(0.10, 0.18);
+        emitSparkles(this.position, FAIRY_DUST_COLOR, 2, 0.05, 0.10);
+      }
+    }
   }
 
   /** Advance along the active curve; returns true when the curve ends. */
@@ -2057,6 +2197,12 @@ class Butterfly {
     if (this.highlight > 0.01) {
       this.glowMat.color.lerp(COLOR.departure, this.highlight * 0.6);
     }
+
+    // warm core glow: a slow, per-flight breath so a field of parked
+    // butterflies never pulses in lockstep
+    const breathe = 0.82 + 0.18 * Math.sin(elapsed * 2.4 + this.seed * 12.0);
+    this.coreGlowMat.opacity = (0.55 + this.highlight * 0.25) * breathe * o;
+    this.coreGlow.scale.setScalar(0.14 + this.highlight * 0.05);
   }
 
   /* ---------------- teardown ---------------- */
@@ -2069,6 +2215,7 @@ class Butterfly {
     this.rightMat.dispose();
     this.bodyMat.dispose();
     this.glowMat.dispose();
+    this.coreGlowMat.dispose();
     this.pickMat.dispose();
     this.trail.dispose();
 
@@ -2487,10 +2634,11 @@ function setParallaxTarget(clientX, clientY) {
 }
 
 function updateParallax(dt, elapsed) {
-  // Touch devices have no hover, so the garden drifts of its own accord.
+  // No pointer, no motion: the frame must never drift on its own, only ever
+  // respond to a real hover/touch target.
   if (!parallax.hasPointer) {
-    parallax.tx = Math.sin(elapsed * 0.13) * 0.6;
-    parallax.ty = Math.cos(elapsed * 0.11) * 0.4;
+    parallax.tx = 0;
+    parallax.ty = 0;
   }
 
   const k = Math.min(1, dt * 2.2);
