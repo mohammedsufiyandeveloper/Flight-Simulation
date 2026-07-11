@@ -1,0 +1,12 @@
+{
+  "name": "flight-simulation",
+  "version": "1.0.0",
+  "description": "An airport operations visualization disguised as a living garden. Butterflies are flights.",
+  "main": "main.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
