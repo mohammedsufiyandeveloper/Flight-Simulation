@@ -685,7 +685,7 @@ async function loadGardenVideoTexture(url) {
   return { texture, video, mediaAspect, mediaResolution };
 }
 
-loadGardenVideoTexture("assets/gardenanimation.mp4?v=2")
+loadGardenVideoTexture("assets/gardenvideo.mp4?v=1")
   .then(({ texture, mediaAspect, mediaResolution }) => {
     livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
     resize();
