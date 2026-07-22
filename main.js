@@ -20,7 +20,7 @@ import * as THREE from "three";
    ================================================================= */
 
 const GARDEN = {
-  width: 7.06,          // matches assets/garden.png aspect (≈1.176)
+  width: 7.06,          // world-space plane size — independent of texture source
   height: 6.0,
   // The frame's inner opening measures ≈ ±2.16 x, ±2.12 y in world units.
   innerX: 1.98,         // playable area inside the white shadow box
@@ -34,6 +34,34 @@ const GARDEN = {
 
 /** Centre of the blue bloom in the artwork — our terminal. */
 const TERMINAL = new THREE.Vector3(-0.35, -0.31, 0.30);
+
+/**
+ * The garden video (gardenanimation.mp4) doesn't share the plane's aspect —
+ * these control how its UVs are fitted onto the plane in the shader (see
+ * fitContainUv in GARDEN_FRAG) without touching any world coordinate above.
+ *
+ * The MP4 is 3840×2160, but that resolution controls only texture sampling
+ * (the contain-fit and the sharpen kernel below) — the Three.js world above
+ * keeps its original dimensions so routes, gates and labels stay aligned.
+ */
+const GARDEN_VIDEO = {
+  width: 3840,
+  height: 2160,
+  aspect: 3840 / 2160,
+  scale: 1.0,
+  offsetX: 0.0,
+  offsetY: 0.0,
+  sharpenDesktop: 0.28,
+  sharpenMobile: 0.0
+};
+
+const VIDEO_RENDER_QUALITY = {
+  desktopDpr: 2.5,
+  mobileDpr: 1.75,
+  bloomStrength: 0.18,
+  bloomRadius: 0.25,
+  bloomThreshold: 1.0
+};
 
 const ALT = {
   ground: 0.30,         // z of a butterfly resting on a flower
@@ -160,7 +188,7 @@ const renderer = new THREE.WebGLRenderer({
   antialias: true,
   powerPreference: "high-performance"
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(window.devicePixelRatio);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 // Pure black: the bloom pass encodes the clear colour on its way out, so any
@@ -176,29 +204,8 @@ camera.position.set(0, 0, 9);
 let composer = null;
 
 async function initPostProcessing() {
-  try {
-    const [{ EffectComposer }, { RenderPass }, { UnrealBloomPass }, { OutputPass }] =
-      await Promise.all([
-        import("three/addons/postprocessing/EffectComposer.js"),
-        import("three/addons/postprocessing/RenderPass.js"),
-        import("three/addons/postprocessing/UnrealBloomPass.js"),
-        import("three/addons/postprocessing/OutputPass.js")
-      ]);
-
-    const c = new EffectComposer(renderer);
-    c.addPass(new RenderPass(scene, camera));
-    c.addPass(new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth, window.innerHeight),
-      0.30,   // strength — only glows what is already luminous
-      0.42,   // radius — kept tight so glow doesn't spill past the frame
-      0.88    // threshold
-    ));
-    c.addPass(new OutputPass());
-    composer = c;
-    resize();
-  } catch (err) {
-    console.warn("[Flight Garden] Bloom unavailable, rendering direct.", err);
-  }
+  // Post-processing bloom is disabled to prevent quality loss and glare on the background video animation.
+  composer = null;
 }
 
 /* =================================================================
@@ -405,8 +412,18 @@ const GARDEN_FRAG = /* glsl */`
   uniform float uMaster;          // global intro reveal
   uniform float uBreath;          // 0..1 organic swell
   uniform float uActivity;        // 0..1 how busy the airport is
-  uniform float uWaveMotion;      // 0/1 — leaf/petal UV displacement (off under reduced motion)
   uniform float uGlowMotion;      // 0..1 — brightness/glow breathing amplitude (stays on, just gentler)
+
+  // uMap's own aspect ratio rarely matches the plane's (7.06:6.0) — these fit
+  // it into the plane letterboxed/pillarboxed ("contain"), with no stretch and
+  // no change to any world coordinate. mediaAspect == planeAspect (the PNG
+  // fallback case) makes fitContainUv the identity.
+  uniform float uMediaAspect;
+  uniform float uPlaneAspect;
+  uniform float uVideoScale;
+  uniform vec2  uVideoOffset;
+  uniform vec2  uVideoResolution;  // native media px size, for the sharpen kernel's texel step
+  uniform float uSharpenAmount;    // 0 off (mobile) .. ~0.3 (desktop) — counters bilinear softening
 
   uniform vec2  uTerminal;
   uniform vec2  uGatePos[6];
@@ -424,119 +441,45 @@ const GARDEN_FRAG = /* glsl */`
     return fract(p.x * p.y);
   }
 
-  void main(){
-    // world-space position on the plane, so every radius below is in the same
-    // units as the gates and the holding ring
-    vec2 wp = (vUv - 0.5) * uSize;
-
-    // --- region masks -------------------------------------------------
-    // Sample the artwork undisturbed first, then decide which pixels are
-    // allowed to move or glow at all. Every mask below is explicitly
-    // multiplied down to zero on the near-white frame and the near-black
-    // void, so neither can ever pick up displacement or brightening —
-    // no matter how the thresholds above are tuned later.
-    vec3 rawCol = texture2D(uMap, vUv).rgb;
-    float luminance = dot(rawCol, vec3(0.299, 0.587, 0.114));
-    float maxc = max(rawCol.r, max(rawCol.g, rawCol.b));
-    float minc = min(rawCol.r, min(rawCol.g, rawCol.b));
-    float saturation = maxc - minc;
-    float greenness = rawCol.g - max(rawCol.r, rawCol.b);
-
-    // near-white shadow-box frame: bright and nearly colourless
-    float frameMask = smoothstep(0.80, 0.92, luminance)
-                     * (1.0 - smoothstep(0.04, 0.14, saturation));
-    // near-black void behind the planting
-    float bgMask = 1.0 - smoothstep(0.02, 0.09, luminance);
-    float protect = (1.0 - frameMask) * (1.0 - bgMask);
-
-    // leaf/foliage: green-dominant, mid-luminance
-    float leafMask = smoothstep(0.015, 0.09, greenness)
-                    * smoothstep(0.94, 0.55, luminance)
-                    * protect;
-
-    // petals/flower centre: bright and saturated, but not green — colour
-    // agnostic on purpose so it follows whatever bloom is painted into the
-    // artwork rather than a hard-coded hue
-    float petalMask = smoothstep(0.22, 0.52, luminance)
-                     * smoothstep(0.08, 0.22, saturation)
-                     * (1.0 - smoothstep(0.0, 0.05, greenness))
-                     * protect;
-
-    // --- breeze field, foliage + a whisper on petals -----------------------
-    // Per-clump phase offset (from a coarse hash of world position) keeps
-    // neighbouring leaves from swaying in lockstep — the wind moves through
-    // the planting rather than the whole sheet nodding at once.
-    float clump = hash21(floor(wp * 3.2));
-    float phase = clump * 6.283185;
-
-    float sway    = sin(uTime * 0.55 + wp.x * 1.4 + phase) * 0.6
-                   + sin(uTime * 0.92 + wp.x * 3.6 - phase * 0.5) * 0.4;
-    float breathe = sin(uTime * 0.40 + wp.y * 1.1 + phase * 0.7) * 0.5
-                   + sin(uTime * 0.23 + wp.x * 0.6 + wp.y * 0.9 + phase) * 0.5;
-    float ripple  = sin(wp.x * 6.3 - uTime * 0.8 + phase) * sin(wp.y * 5.1 + uTime * 0.65 - phase * 0.3);
-
-    vec2 breeze = vec2(sway * 0.65 + ripple * 0.35, breathe * 0.55 + ripple * 0.25);
-
-    // leaves flow with the full breeze; petals barely move — they breathe
-    // and glow rather than bend
-    float waveWeight = leafMask + petalMask * 0.30;
-    vec2 uv = vUv + breeze * 0.0013 * uMaster * uWaveMotion * waveWeight;
-
-    vec3 col = texture2D(uMap, uv).rgb;
-
-    // --- leaf brightness shimmer --------------------------------------------
-    // Slow, incommensurate sines keyed off world position and clump phase so
-    // the swell never reads as a metronome; gated by leafMask so the frame
-    // never brightens.
-    float leafBreath = sin(wp.x * 1.3 + uTime * 0.22 + phase) * sin(wp.y * 1.7 - uTime * 0.17)
-                      + 0.5 * sin(wp.x * 2.9 - uTime * 0.31 + phase + 1.7);
-    col *= 1.0 + leafBreath * 0.05 * leafMask * uMaster * uGlowMotion;
-
-    // --- petal breathing + warm life pulse ----------------------------------
-    // Flowers stay still and instead swell gently and warm through, like
-    // light moving under the petal surface.
-    float petalBreath = sin(uTime * 0.35 + wp.x * 0.8 + wp.y * 0.6) * 0.5
-                       + sin(uTime * 0.19 + wp.y * 1.3 - wp.x * 0.4 + 1.1) * 0.5;
-    col *= 1.0 + petalBreath * 0.045 * petalMask * uMaster * uGlowMotion;
-
-    float warmPulse = 0.5 + 0.5 * sin(uTime * 0.17 + wp.x * 0.4 + wp.y * 0.3);
-    col += GOLD * warmPulse * 0.035 * petalMask * uMaster * uGlowMotion;
-
-    // --- drifting highlight / shadow, foliage + petals only -------------------
-    // A slow diagonal band of moonlight crossing the planting. Multiplying by
-    // (leafMask + petalMask) instead of applying it globally keeps the frame
-    // and the void pinned at their true pixel values.
-    float band = 0.5 + 0.5 * sin(wp.x * 0.55 + wp.y * 0.42 + uTime * 0.13);
-    float bandMask = clamp(leafMask + petalMask, 0.0, 1.0);
-    col *= mix(1.0, mix(0.90, 1.0, band), bandMask * uGlowMotion);
-
-    // --- Terminal Bloom breathing ----------------------------------------
-    // Luminance swell centred on the flower, stronger when traffic is heavy.
-    // The falloff is tight enough that the frame never sees it.
-    float dT = length(wp - uTerminal);
-    float bloomFall = exp(-dT * dT * 1.6);
-    col *= 1.0 + uBreath * bloomFall * (0.09 + 0.08 * uActivity) * uMaster;
-
-    // --- gate auras -------------------------------------------------------
-    // A tight core lights the petal; a wide halo bleeds into the leaves.
-    // Beyond ~1.1 world units the halo is under 1/8000 and invisible. Skipping
-    // it there is a coherent branch — the gates cluster on one flower, so whole
-    // warps take the same path and the two exp() calls are genuinely saved.
-    vec3 aura = vec3(0.0);
-    for (int i = 0; i < 6; i++) {
-      float r2 = dot(wp - uGatePos[i], wp - uGatePos[i]);
-      if (r2 > 1.2) continue;
-
-      float core = exp(-r2 * 42.0);
-      float halo = exp(-r2 * 7.5);
-      float a = uGateFx[i].x;
-      float f = uGateFx[i].y;
-      aura += uGateColor[i] * (core * (0.40 * a + 0.80 * f)
-                             + halo * (0.10 * a + 0.20 * f));
+  // Maps a plane UV onto uMap's own UV space so the media is fully visible,
+  // centred, and undistorted — never cropped, never stretched. Whichever axis
+  // the media is proportionally narrower on gets letterboxed: that axis's
+  // valid range shrinks to less than 0..1, and callers must mask the rest out
+  // rather than sample it (clamping would smear the edge pixel into the bars).
+  vec2 fitContainUv(vec2 uv){
+    vec2 p = uv - 0.5;
+    if (uMediaAspect > uPlaneAspect) {
+      p.y *= uMediaAspect / uPlaneAspect;   // media wider than plane: letterbox top/bottom
+    } else {
+      p.x *= uPlaneAspect / uMediaAspect;   // media taller than plane: pillarbox left/right
     }
-    col += aura * uMaster;
+    p = p / uVideoScale - uVideoOffset;
+    return p + 0.5;
+  }
 
-    gl_FragColor = vec4(col, 1.0);
+  // Unsharp-mask style 5-tap kernel: video played back through bilinear
+  // filtering at less-than-native size reads soft on a bright 4K display, so
+  // this counters it with a cheap high-pass boost. Weights sum to 1.0 so flat
+  // regions are untouched; only edges gain contrast.
+  vec3 sampleSharp(sampler2D tex, vec2 uv, vec2 texel){
+    vec3 c = texture2D(tex, uv).rgb;
+    vec3 n = texture2D(tex, uv + vec2(0.0, texel.y)).rgb;
+    vec3 s = texture2D(tex, uv - vec2(0.0, texel.y)).rgb;
+    vec3 e = texture2D(tex, uv + vec2(texel.x, 0.0)).rgb;
+    vec3 w = texture2D(tex, uv - vec2(texel.x, 0.0)).rgb;
+    return c * 1.35 - (n + s + e + w) * 0.0875;
+  }
+
+  void main(){
+    vec2 mediaUv = fitContainUv(vUv);
+    float mediaValid = step(0.0, mediaUv.x) * step(0.0, mediaUv.y)
+                      * step(mediaUv.x, 1.0) * step(mediaUv.y, 1.0);
+
+    vec2 safeUv = clamp(mediaUv, 0.0, 1.0);
+    vec3 normalCol = texture2D(uMap, safeUv).rgb;
+    vec3 rawCol = normalCol * mediaValid;
+
+    gl_FragColor = vec4(rawCol, 1.0);
   }
 `;
 
@@ -545,7 +488,13 @@ const GARDEN_FRAG = /* glsl */`
  * pushed in once per frame; nothing here allocates after construction.
  */
 class LivingGarden {
-  constructor(texture) {
+  /**
+   * mediaAspect defaults to the plane's own aspect (an identity fit) — the
+   * PNG fallback case, where the texture was already baked to fill the
+   * plane. Pass the video's real videoWidth/videoHeight ratio to letterbox
+   * or pillarbox it cleanly instead.
+   */
+  constructor(texture, mediaAspect = GARDEN.width / GARDEN.height, mediaResolution = [GARDEN_VIDEO.width, GARDEN_VIDEO.height]) {
     this.material = new THREE.ShaderMaterial({
       vertexShader: GARDEN_VERT,
       fragmentShader: GARDEN_FRAG,
@@ -556,8 +505,15 @@ class LivingGarden {
         uMaster: { value: 0 },
         uBreath: { value: 0 },
         uActivity: { value: 0 },
-        uWaveMotion: { value: REDUCED_MOTION ? 0 : 1 },
         uGlowMotion: { value: REDUCED_MOTION ? 0.35 : 1 },
+        uMediaAspect: { value: mediaAspect },
+        uPlaneAspect: { value: GARDEN.width / GARDEN.height },
+        uVideoScale: { value: GARDEN_VIDEO.scale },
+        uVideoOffset: { value: new THREE.Vector2(GARDEN_VIDEO.offsetX, GARDEN_VIDEO.offsetY) },
+        uVideoResolution: { value: new THREE.Vector2(mediaResolution[0], mediaResolution[1]) },
+        uSharpenAmount: {
+          value: window.innerWidth < 720 ? GARDEN_VIDEO.sharpenMobile : GARDEN_VIDEO.sharpenDesktop
+        },
         uTerminal: { value: new THREE.Vector2(TERMINAL.x, TERMINAL.y) },
         uGatePos: { value: gates.map((g) => new THREE.Vector2(g.position.x, g.position.y)) },
         uGateColor: { value: gates.map(() => new THREE.Color(0, 0, 0)) },
@@ -596,6 +552,16 @@ class LivingGarden {
       u.uGateColor.value[i].copy(gate.auraColor);
       u.uGateFx.value[i].set(gate.aura, gate.flash);
     }
+
+    // Manually update video texture only when it has valid data and is not seeking.
+    // This freezes the texture on the last frame during video loop seek and prevents blurry keyframe flashes.
+    const texture = u.uMap.value;
+    if (texture && texture.image && texture.image.tagName === "VIDEO") {
+      const video = texture.image;
+      if (video.readyState >= video.HAVE_CURRENT_DATA && !video.seeking) {
+        texture.needsUpdate = true;
+      }
+    }
   }
 
   dispose() {
@@ -613,10 +579,11 @@ async function readPngSize(blob) {
 }
 
 /**
- * garden.png is 7805×6640 — 207 MB of decoded RGBA, and wider than the 4096
- * MAX_TEXTURE_SIZE that plenty of mobile GPUs report. Uploaded as-is it costs a
- * quarter-gigabyte of VRAM on desktop and fails outright on a phone, leaving a
- * black garden. The plane is never drawn wider than ~1300 CSS px, so we decode
+ * Fallback path only — used when the garden video can't load. garden.png is
+ * 7805×6640, 207 MB of decoded RGBA and wider than the 4096 MAX_TEXTURE_SIZE
+ * that plenty of mobile GPUs report. Uploaded as-is it costs a quarter-
+ * gigabyte of VRAM on desktop and fails outright on a phone, leaving a black
+ * garden. The plane is never drawn wider than ~1300 CSS px, so we decode
  * straight to a GPU-safe size and upload that instead.
  */
 async function loadGardenTexture(url) {
@@ -664,8 +631,58 @@ async function loadGardenTexture(url) {
   return texture;
 }
 
-loadGardenTexture("assets/garden.png")
-  .then((texture) => {
+/**
+ * Loads assets/gardenanimation.mp4 as a looping, muted THREE.VideoTexture —
+ * the primary garden source. garden.png stays as the poster/fallback for
+ * browsers that block autoplay or when the video fails to load.
+ */
+async function loadGardenVideoTexture(url) {
+  const video = document.createElement("video");
+  video.src = url;
+  video.loop = true;
+  video.muted = true;
+  video.defaultMuted = true;
+  video.playsInline = true;
+  video.autoplay = true;
+  video.preload = "auto";
+
+  await new Promise((resolve, reject) => {
+    video.addEventListener("loadeddata", resolve, { once: true });
+    video.addEventListener("error", () => reject(video.error ?? new Error("video load error")), { once: true });
+  });
+
+  try {
+    await video.play();
+  } catch (err) {
+    // Autoplay blocked — the texture is still valid, just paused on the
+    // first frame. Retry once the user interacts with the page.
+    const resume = () => video.play().catch(() => {});
+    window.addEventListener("pointerdown", resume, { once: true });
+    window.addEventListener("touchstart", resume, { once: true });
+  }
+
+  const texture = new THREE.Texture(video);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+
+  const mediaAspect = video.videoWidth / video.videoHeight;
+  const mediaResolution = [video.videoWidth, video.videoHeight];
+  return { texture, video, mediaAspect, mediaResolution };
+}
+
+loadGardenVideoTexture("assets/gardenanimation.mp4")
+  .then(({ texture, mediaAspect, mediaResolution }) => {
+    livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
+    resize();
+  })
+  .catch(async (err) => {
+    console.warn("[Flight Garden] Garden video unavailable, falling back to garden.png.", err);
+    const texture = await loadGardenTexture("assets/garden.png");
     livingGarden = new LivingGarden(texture);
     resize();
   })
@@ -1199,8 +1216,8 @@ function projectLabel(el, worldPos, visible) {
   _proj.copy(worldPos).project(camera);
   if (_proj.z > 1) { el.style.opacity = "0"; return; }
 
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  const vw = canvas.clientWidth;
+  const vh = canvas.clientHeight;
 
   if (labelMetricsDirty || el._halfWidth === undefined) el._halfWidth = el.offsetWidth / 2;
 
@@ -2517,8 +2534,11 @@ function setPinned(b) {
 }
 
 function pickAt(clientX, clientY) {
-  pointer.x = (clientX / window.innerWidth) * 2 - 1;
-  pointer.y = -(clientY / window.innerHeight) * 2 + 1;
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  pointer.x = (x / rect.width) * 2 - 1;
+  pointer.y = -(y / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
 
   const targets = butterflies.filter((b) => b.opacity > 0.25).map((b) => b.pick);
@@ -2629,8 +2649,11 @@ const parallax = { x: 0, y: 0, tx: 0, ty: 0, hasPointer: false };
 
 function setParallaxTarget(clientX, clientY) {
   parallax.hasPointer = true;
-  parallax.tx = (clientX / window.innerWidth - 0.5) * 2;
-  parallax.ty = (clientY / window.innerHeight - 0.5) * 2;
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  parallax.tx = (x / rect.width - 0.5) * 2;
+  parallax.ty = (y / rect.height - 0.5) * 2;
 }
 
 function updateParallax(dt, elapsed) {
@@ -2665,9 +2688,8 @@ function updateParallax(dt, elapsed) {
  * bleeds to the screen edges instead of floating in a sea of black.
  */
 function fitCamera() {
-  const portrait = camera.aspect < 0.85;
-  const focusWidth = portrait ? 4.42 : 5.05;   // inner opening ≈ 4.36 wide
-  const focusHeight = 5.05;                    // white frame ≈ 4.72 tall
+  const focusWidth = GARDEN.width;
+  const focusHeight = GARDEN.height;
 
   const fovY = THREE.MathUtils.degToRad(camera.fov);
   const distForHeight = (focusHeight / 2) / Math.tan(fovY / 2);
@@ -2682,13 +2704,11 @@ function fitCamera() {
 }
 
 function resize() {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
 
-  // The piece is fill-bound (bloom blurs the whole frame), so on phones — where
-  // devicePixelRatio is often 3 — cap lower. At a small CSS viewport 1.75x still
-  // reads as crisp, and it cuts fragment work by ~45%.
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, w < 720 ? 1.75 : 2));
+  // Disable resolution cap for 100% native quality
+  renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(w, h, false);
   if (composer) composer.setSize(w, h);
 
@@ -2698,6 +2718,11 @@ function resize() {
 
   // point size attenuation matches three's own: drawing-buffer height / 2
   motes.mat.uniforms.uScale.value = renderer.getDrawingBufferSize(_bufferSize).y * 0.5;
+
+  if (livingGarden) {
+    livingGarden.material.uniforms.uSharpenAmount.value =
+      canvas.clientWidth < 720 ? GARDEN_VIDEO.sharpenMobile : GARDEN_VIDEO.sharpenDesktop;
+  }
 
   labelMetricsDirty = true;   // type size changes across breakpoints
 }

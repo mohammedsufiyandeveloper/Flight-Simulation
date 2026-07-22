@@ -31,6 +31,12 @@
           "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: "SF Mono", "JetBrains Mono", ui-monospace, "Cascadia Mono",
           "Roboto Mono", Menlo, Consolas, monospace;
+
+  /* HUD layout variables for desktop */
+  --hud-padding: clamp(14px, 2.2vw, 28px);
+  --hud-gap: 20px;
+  --left-col-width: clamp(220px, 18vw, 280px);
+  --right-col-width: clamp(240px, 20vw, 300px);
 }
 
 * { box-sizing: border-box; }
@@ -67,6 +73,15 @@ html, body {
   inset: 0;
 }
 
+@media (min-width: 721px) {
+  .stage {
+    top: var(--hud-padding);
+    bottom: var(--hud-padding);
+    left: calc(var(--left-col-width) + var(--hud-padding) + var(--hud-gap));
+    right: calc(var(--right-col-width) + var(--hud-padding) + var(--hud-gap));
+  }
+}
+
 #scene {
   display: block;
   width: 100%;
@@ -74,17 +89,11 @@ html, body {
   touch-action: none;
 }
 
-/* Soft cinematic vignette — keeps the garden centred and jewel-like */
 .vignette {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background:
-    radial-gradient(120% 90% at 50% 48%,
-      rgba(0, 0, 0, 0) 42%,
-      rgba(0, 0, 0, 0.35) 78%,
-      rgba(0, 0, 0, 0.72) 100%);
-  mix-blend-mode: multiply;
+  background: none;
 }
 
 /* =============================================================
@@ -183,15 +192,14 @@ html, body {
 .hud {
   position: fixed;
   inset: 0;
-  padding: clamp(14px, 2.2vw, 28px);
+  padding: var(--hud-padding);
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  grid-template-rows: auto 1fr auto;
+  grid-template-columns: var(--left-col-width) 1fr var(--right-col-width);
+  grid-template-rows: auto 1fr;
   grid-template-areas:
     "tower  .  stats"
-    ".      .  ."
     "legend .  detail";
-  gap: 12px;
+  gap: var(--hud-gap);
   pointer-events: none;
 }
 
@@ -229,10 +237,10 @@ html, body {
   to { opacity: 1; transform: translateY(0); }
 }
 
-.tower  { grid-area: tower;  animation-delay: 1.9s; width: min(280px, 62vw); }
-.stats  { grid-area: stats;  animation-delay: 2.1s; }
-.legend { grid-area: legend; animation-delay: 2.3s; }
-.detail { grid-area: detail; animation-delay: 2.3s; width: min(300px, 76vw); }
+.tower  { grid-area: tower;  animation-delay: 1.9s; width: 100%; }
+.stats  { grid-area: stats;  animation-delay: 2.1s; width: 100%; }
+.legend { grid-area: legend; animation-delay: 2.3s; width: 100%; }
+.detail { grid-area: detail; animation-delay: 2.3s; width: 100%; }
 
 .eyebrow {
   margin: 0;
@@ -375,7 +383,7 @@ html, body {
    LEGEND PANEL
    ============================================================= */
 
-.legend { width: min(220px, 62vw); }
+.legend { width: 100%; }
 
 .route-key,
 .airline-key {
