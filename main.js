@@ -78,10 +78,10 @@ const GATE_RADIUS = 0.46;
 const MAX_DT = 1 / 24;  // clamp so tab-switches never teleport flights
 
 const COLOR = {
-  arrival:   new THREE.Color("#62dcff"),
+  arrival: new THREE.Color("#62dcff"),
   departure: new THREE.Color("#ffc46b"),
-  holding:   new THREE.Color("#ffffff"),
-  terminal:  new THREE.Color("#9fe6b8")
+  holding: new THREE.Color("#ffffff"),
+  terminal: new THREE.Color("#9fe6b8")
 };
 
 /** Golden fairy dust, sprinkled behind moving butterflies. */
@@ -92,12 +92,12 @@ const FAIRY_DUST_COLOR = new THREE.Color("#ffd27a");
    ================================================================= */
 
 const AIRLINES = {
-  AI: { name: "Air India",       color: "#e05a45", range: [100, 899] },
-  "6E": { name: "IndiGo",        color: "#4f7cf5", range: [2000, 2999] },
-  UK: { name: "Vistara",         color: "#b487f0", range: [800, 999] },
-  EK: { name: "Emirates",        color: "#e8b44c", range: [500, 599] },
-  QR: { name: "Qatar Airways",   color: "#c8577f", range: [500, 699] },
-  LH: { name: "Lufthansa",       color: "#e9d16a", range: [750, 799] },
+  AI: { name: "Air India", color: "#e05a45", range: [100, 899] },
+  "6E": { name: "IndiGo", color: "#4f7cf5", range: [2000, 2999] },
+  UK: { name: "Vistara", color: "#b487f0", range: [800, 999] },
+  EK: { name: "Emirates", color: "#e8b44c", range: [500, 599] },
+  QR: { name: "Qatar Airways", color: "#c8577f", range: [500, 699] },
+  LH: { name: "Lufthansa", color: "#e9d16a", range: [750, 799] },
   BA: { name: "British Airways", color: "#7fa8e8", range: [100, 299] }
 };
 
@@ -112,38 +112,50 @@ const CITIES = {
 };
 
 const AIRPORTS = {
-  BLR: { tower: "BLR Garden Tower",  full: "Kempegowda Intl",       intensity: 1.00,
-         routes: ["DEL", "BOM", "DXB", "SIN", "MAA", "HYD", "LHR", "DOH"] },
-  DEL: { tower: "DEL Garden Tower",  full: "Indira Gandhi Intl",    intensity: 1.35,
-         routes: ["BLR", "BOM", "DXB", "FRA", "LHR", "CCU", "MAA", "JFK"] },
-  BOM: { tower: "BOM Garden Tower",  full: "Chhatrapati Shivaji",   intensity: 1.20,
-         routes: ["DEL", "BLR", "GOI", "DXB", "DOH", "LHR", "SIN", "AMS"] },
-  MAA: { tower: "MAA Garden Tower",  full: "Chennai Intl",          intensity: 0.85,
-         routes: ["BLR", "HYD", "CCU", "SIN", "DXB", "BKK", "DEL"] },
-  HYD: { tower: "HYD Garden Tower",  full: "Rajiv Gandhi Intl",     intensity: 0.90,
-         routes: ["BLR", "DEL", "BOM", "DXB", "DOH", "MAA", "SIN"] },
-  LHR: { tower: "LHR Garden Tower",  full: "London Heathrow",       intensity: 1.50,
-         routes: ["JFK", "CDG", "AMS", "FRA", "DXB", "HKG", "DEL", "SYD"] }
+  BLR: {
+    tower: "BLR Garden Tower", full: "Kempegowda Intl", intensity: 1.00,
+    routes: ["DEL", "BOM", "DXB", "SIN", "MAA", "HYD", "LHR", "DOH"]
+  },
+  DEL: {
+    tower: "DEL Garden Tower", full: "Indira Gandhi Intl", intensity: 1.35,
+    routes: ["BLR", "BOM", "DXB", "FRA", "LHR", "CCU", "MAA", "JFK"]
+  },
+  BOM: {
+    tower: "BOM Garden Tower", full: "Chhatrapati Shivaji", intensity: 1.20,
+    routes: ["DEL", "BLR", "GOI", "DXB", "DOH", "LHR", "SIN", "AMS"]
+  },
+  MAA: {
+    tower: "MAA Garden Tower", full: "Chennai Intl", intensity: 0.85,
+    routes: ["BLR", "HYD", "CCU", "SIN", "DXB", "BKK", "DEL"]
+  },
+  HYD: {
+    tower: "HYD Garden Tower", full: "Rajiv Gandhi Intl", intensity: 0.90,
+    routes: ["BLR", "DEL", "BOM", "DXB", "DOH", "MAA", "SIN"]
+  },
+  LHR: {
+    tower: "LHR Garden Tower", full: "London Heathrow", intensity: 1.50,
+    routes: ["JFK", "CDG", "AMS", "FRA", "DXB", "HKG", "DEL", "SYD"]
+  }
 };
 
 const STATUS_LABEL = {
-  inbound:  "Arriving",
-  holding:  "Holding",
-  final:    "Landing",
-  parked:   "At Gate",
+  inbound: "Arriving",
+  holding: "Holding",
+  final: "Landing",
+  parked: "At Gate",
   boarding: "Boarding",
-  climb:    "Departing",
-  gone:     "Departed"
+  climb: "Departing",
+  gone: "Departed"
 };
 
 const ZONE_LABEL = {
-  inbound:  "Arrival Meadow",
-  holding:  "Holding Pattern",
-  final:    "Final Approach",
-  parked:   "Terminal Bloom",
+  inbound: "Arrival Meadow",
+  holding: "Holding Pattern",
+  final: "Final Approach",
+  parked: "Terminal Bloom",
   boarding: "Terminal Bloom",
-  climb:    "Departure Trail",
-  gone:     "—"
+  climb: "Departure Trail",
+  gone: "—"
 };
 
 /* =================================================================
@@ -535,8 +547,8 @@ class LivingGarden {
    */
   static breath(t) {
     const s = 0.55 * Math.sin(t * 0.31)
-            + 0.30 * Math.sin(t * 0.47 + 1.3)
-            + 0.15 * Math.sin(t * 0.83 + 2.1);
+      + 0.30 * Math.sin(t * 0.47 + 1.3)
+      + 0.15 * Math.sin(t * 0.83 + 2.1);
     return 0.5 + 0.5 * s;
   }
 
@@ -551,16 +563,6 @@ class LivingGarden {
       const gate = gates[i];
       u.uGateColor.value[i].copy(gate.auraColor);
       u.uGateFx.value[i].set(gate.aura, gate.flash);
-    }
-
-    // Manually update video texture only when it has valid data and is not seeking.
-    // This freezes the texture on the last frame during video loop seek and prevents blurry keyframe flashes.
-    const texture = u.uMap.value;
-    if (texture && texture.image && texture.image.tagName === "VIDEO") {
-      const video = texture.image;
-      if (video.readyState >= video.HAVE_CURRENT_DATA && !video.seeking) {
-        texture.needsUpdate = true;
-      }
     }
   }
 
@@ -656,12 +658,12 @@ async function loadGardenVideoTexture(url) {
   } catch (err) {
     // Autoplay blocked — the texture is still valid, just paused on the
     // first frame. Retry once the user interacts with the page.
-    const resume = () => video.play().catch(() => {});
+    const resume = () => video.play().catch(() => { });
     window.addEventListener("pointerdown", resume, { once: true });
     window.addEventListener("touchstart", resume, { once: true });
   }
 
-  const texture = new THREE.Texture(video);
+  const texture = new THREE.VideoTexture(video);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
@@ -670,12 +672,20 @@ async function loadGardenVideoTexture(url) {
   texture.generateMipmaps = false;
   texture.needsUpdate = true;
 
+  // Override the update method to block texture uploads to the GPU during seeks/loops.
+  // This prevents Chrome from uploading blurry keyframes at the loop boundary.
+  texture.update = function () {
+    if (video.readyState >= video.HAVE_CURRENT_DATA && !video.seeking) {
+      this.needsUpdate = true;
+    }
+  };
+
   const mediaAspect = video.videoWidth / video.videoHeight;
   const mediaResolution = [video.videoWidth, video.videoHeight];
   return { texture, video, mediaAspect, mediaResolution };
 }
 
-loadGardenVideoTexture("assets/gardenanimation.mp4")
+loadGardenVideoTexture("assets/gardenanimation.mp4?v=2")
   .then(({ texture, mediaAspect, mediaResolution }) => {
     livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
     resize();
@@ -1186,10 +1196,10 @@ function updateGates(dt, elapsed, master) {
 const labelLayer = document.getElementById("labelLayer");
 
 const ZONES = [
-  { kind: "terminal",  name: "Terminal Bloom",  note: "Gates G1–G6",     pos: new THREE.Vector3(TERMINAL.x, TERMINAL.y + 0.98, ALT.ground) },
-  { kind: "arrival",   name: "Arrival Meadow",  note: "Inbound traffic", pos: new THREE.Vector3(-1.62, -1.66, ALT.ground) },
-  { kind: "departure", name: "Departure Trail", note: "Outbound climb",  pos: new THREE.Vector3(1.28, 1.56, ALT.ground) },
-  { kind: "holding",   name: "Holding Pattern", note: "Stacked, waiting", pos: new THREE.Vector3(0.68, -1.54, ALT.ground) }
+  { kind: "terminal", name: "Terminal Bloom", note: "Gates G1–G6", pos: new THREE.Vector3(TERMINAL.x, TERMINAL.y + 0.98, ALT.ground) },
+  { kind: "arrival", name: "Arrival Meadow", note: "Inbound traffic", pos: new THREE.Vector3(-1.62, -1.66, ALT.ground) },
+  { kind: "departure", name: "Departure Trail", note: "Outbound climb", pos: new THREE.Vector3(1.28, 1.56, ALT.ground) },
+  { kind: "holding", name: "Holding Pattern", note: "Stacked, waiting", pos: new THREE.Vector3(0.68, -1.54, ALT.ground) }
 ];
 
 function buildZoneLabels() {
@@ -1503,12 +1513,12 @@ const TRAIL_POINTS = 52;
  * cue that tells you which way a flight is travelling without reading a label.
  */
 const TRAIL_STYLE = {
-  inbound:  { head: "#5ad2ff", tail: "#1030c8", width: 1.00, gain: 0.90 },
-  final:    { head: "#7ee0ff", tail: "#1642dc", width: 0.90, gain: 0.90 },
-  holding:  { head: "#8fc8ff", tail: "#2a4f9e", width: 0.62, gain: 0.46 },
+  inbound: { head: "#5ad2ff", tail: "#1030c8", width: 1.00, gain: 0.90 },
+  final: { head: "#7ee0ff", tail: "#1642dc", width: 0.90, gain: 0.90 },
+  holding: { head: "#8fc8ff", tail: "#2a4f9e", width: 0.62, gain: 0.46 },
   boarding: { head: "#ffd79a", tail: "#e07a20", width: 0.70, gain: 0.50 },
-  climb:    { head: "#6cc4ff", tail: "#ff9d38", width: 1.00, gain: 1.00 },
-  gone:     { head: "#6cc4ff", tail: "#ff9d38", width: 1.00, gain: 1.00 }
+  climb: { head: "#6cc4ff", tail: "#ff9d38", width: 1.00, gain: 1.00 },
+  gone: { head: "#6cc4ff", tail: "#ff9d38", width: 1.00, gain: 1.00 }
 };
 
 /**
@@ -1538,7 +1548,7 @@ class TrailRibbon {
       const a = i * 3;
       const b = a + 3;
       indices.set([
-        a, a + 1, b,     a + 1, b + 1, b,        // left half
+        a, a + 1, b, a + 1, b + 1, b,        // left half
         a + 1, a + 2, b + 1, a + 2, b + 2, b + 1 // right half
       ], i * 12);
     }
@@ -2004,13 +2014,13 @@ class Butterfly {
     }
 
     switch (this.state) {
-      case "inbound":  this.updateInbound(dt); break;
-      case "holding":  this.updateHolding(dt); break;
-      case "final":    this.updateFinal(dt); break;
-      case "parked":   this.updateParked(dt); break;
+      case "inbound": this.updateInbound(dt); break;
+      case "holding": this.updateHolding(dt); break;
+      case "final": this.updateFinal(dt); break;
+      case "parked": this.updateParked(dt); break;
       case "boarding": this.updateBoarding(dt); break;
-      case "climb":    this.updateClimb(dt); break;
-      case "gone":     this.updateGone(dt); break;
+      case "climb": this.updateClimb(dt); break;
+      case "gone": this.updateGone(dt); break;
     }
 
     this.applyBreeze(dt, elapsed);

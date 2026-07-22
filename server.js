@@ -44,7 +44,7 @@ const server = http.createServer((req, res) => {
 
     const ext = path.extname(absolutePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    const isAsset = ext === '.mp4' || ext === '.png' || ext === '.jpg' || ext === '.webm';
+    const isStaticImage = ext === '.png' || ext === '.jpg' || ext === '.gif' || ext === '.svg';
 
     const range = req.headers.range;
     if (range) {
@@ -61,16 +61,12 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      const headers = {
+      res.writeHead(206, {
         'Content-Type': contentType,
         'Content-Range': `bytes ${start}-${end}/${stats.size}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': end - start + 1,
-      };
-      if (isAsset) {
-        headers['Cache-Control'] = 'public, max-age=31536000, immutable';
-      }
-      res.writeHead(206, headers);
+      });
       fs.createReadStream(absolutePath, { start, end }).pipe(res);
       return;
     }
@@ -80,7 +76,7 @@ const server = http.createServer((req, res) => {
       'Accept-Ranges': 'bytes',
       'Content-Length': stats.size,
     };
-    if (isAsset) {
+    if (isStaticImage) {
       headers['Cache-Control'] = 'public, max-age=31536000, immutable';
     }
     res.writeHead(200, headers);
