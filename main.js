@@ -1,17 +1,30 @@
 /* =================================================================
    FLIGHT GARDEN
-   An airport operations visualization disguised as a living garden.
+   An airport operations visualization disguised as a living garden,
+   modelled on Kempegowda International Airport (BLR), Bengaluru.
+
+   Real-world reference
+     BLR operates two terminals on one campus. T2, opened 2022, is
+     literally built as "a terminal in a garden" — so it is the hero
+     structure here (the mainflower.glb bloom at the centre of the
+     scene). T1 is the older, domestic-leaning terminal, represented
+     as a smaller secondary arc of gates on the same bloom.
 
    Metaphor map
-     garden           → the airport
-     butterflies      → flights
-     the blue bloom   → Terminal Bloom (gates G1–G6)
-     cyan corridors   → arrival approach paths
-     amber trails     → departure climb-out paths
-     white arcs       → the holding pattern stack
+     garden               → Kempegowda International Airport (BLR)
+     the flower bloom     → the terminal campus (mainflower.glb)
+       · C1–C6 petals      → Terminal 2, "Garden Terminal" (hero, international)
+       · D1–D4 petals      → Terminal 1, domestic pier
+     butterflies           → flights
+     cyan corridors        → arrival approach paths
+     amber trails           → departure climb-out paths
+     white arcs             → the holding pattern stack
    ================================================================= */
 
 import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 /* =================================================================
    1 · WORLD CONFIG
@@ -32,8 +45,12 @@ const GARDEN = {
   edgeY: 1.98
 };
 
-/** Centre of the blue bloom in the artwork — our terminal. */
-const TERMINAL = new THREE.Vector3(-0.35, -0.31, 0.30);
+/** Two clearly separated terminal blooms, arranged side by side in the garden. */
+const TERMINAL = new THREE.Vector3(0.88, -0.18, 0.30);
+
+/** Terminal 1 and Terminal 2 use matching, separately positioned blooms. */
+const TERMINAL_T1 = new THREE.Vector3(-0.88, -0.18, 0.30);
+const TERMINAL_FLOWER_SCALE = 0.8;
 
 /**
  * The garden video (gardenanimation.mp4) doesn't share the plane's aspect —
@@ -64,16 +81,29 @@ const VIDEO_RENDER_QUALITY = {
 };
 
 const ALT = {
-  ground: 0.30,         // z of a butterfly resting on a flower
-  cruise: 0.92,         // z of a butterfly at corridor altitude
-  ceiling: 31000        // ft, for the readout only
+  // cube.glb's viewer-facing rim tops out at roughly z=1.74 after the garden
+  // fit transform. Keep all operational data just in front of that surface
+  // so routes, gates, labels and butterflies live on the garden instead of
+  // appearing behind the box when OrbitControls turns to a side view.
+  ground: 3.82,         // z of gates and a butterfly resting on a flower
+  cruise: 3.44,         // z of airborne traffic and route corridors
+  ceiling: 41000        // ft, for the readout only
 };
 
 // The bloom is left-of-centre in the artwork, so the stack has to stay tight
 // enough to leave the Arrival Meadow room for a real approach corridor.
 const HOLD_RADIUS = 1.20;
-const GATE_COUNT = 6;
-const GATE_RADIUS = 0.46;
+
+// Two terminals, one campus — mirrors BLR's real Kempegowda layout. T2 (hero,
+// "Garden Terminal") is the big central bloom and gets the larger share of
+// gates, since it's both the busier real terminal (~25M pax/yr vs T1's ~20M)
+// and the one whose real architecture *is* this project's garden metaphor.
+// T1 and T2 are matching blooms with their own gate groups.
+const T2_GATE_COUNT = 6;   // Terminal 2 · Garden Terminal · petals C1–C6
+const T1_GATE_COUNT = 4;   // Terminal 1 · Domestic Pier   · petals D1–D4
+const GATE_COUNT = T1_GATE_COUNT + T2_GATE_COUNT;
+const GATE_RADIUS = 0.36;
+const GATE_RADIUS_T1 = GATE_RADIUS;
 
 const MAX_DT = 1 / 24;  // clamp so tab-switches never teleport flights
 
@@ -209,8 +239,44 @@ renderer.setClearColor(0x000000, 1);
 
 const scene = new THREE.Scene();
 
+// --- Lighting for 3D GLB model ---
+const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+scene.add(ambientLight);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.8);
+dirLight.position.set(5, 10, 7);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.width = 2048;
+dirLight.shadow.mapSize.height = 2048;
+dirLight.shadow.camera.near = 0.5;
+dirLight.shadow.camera.far = 25;
+const d = 5;
+dirLight.shadow.camera.left = -d;
+dirLight.shadow.camera.right = d;
+dirLight.shadow.camera.top = d;
+dirLight.shadow.camera.bottom = -d;
+dirLight.shadow.bias = -0.0005;
+scene.add(dirLight);
+
+// Enable shadow mapping in the renderer
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
 const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
 camera.position.set(0, 0, 9);
+
+let controls = null;
+
+function initControls() {
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.05;
+  controls.maxPolarAngle = Math.PI / 2 - 0.05; // Don't go below ground level
+  controls.minDistance = 2;
+  controls.maxDistance = 25;
+}
+
+initControls();
 
 /* --- optional bloom; the piece degrades gracefully without it ---- */
 let composer = null;
@@ -499,6 +565,446 @@ const GARDEN_FRAG = /* glsl */`
  * Owns the garden plane and the uniforms that make it feel alive. Gate state is
  * pushed in once per frame; nothing here allocates after construction.
  */
+/**
+ * Configuration for fine-tuning the 3D GLB garden model.
+ */
+const GARDEN_MODEL_CONFIG = {
+  scale: 1.0,           // Extra scale multiplier if needed
+  offsetX: 0.0,         // Fine-tuning position offset
+  offsetY: 0.0,
+  offsetZ: -0.2,
+  rotationX: 0, // Z-up GLTF aligns directly with the project coordinate system
+  rotationY: 0,
+  rotationZ: 0
+};
+
+/**
+ * Named tuning knobs for how the grass field is contained inside the
+ * cube/frame's inner opening, and how the ground layers stack vertically.
+ * All fractions are relative to the cube's own footprint, measured live from
+ * cube.glb's bounding box — see the containment math in LivingGardenModel,
+ * not hand-picked against a single render.
+ */
+const GARDEN_CONTAINMENT = {
+  cubeWallInsetX: 0.04,         // measured left/right inner wall thickness
+  cubeWallInsetY: 0.0,          // extend turf beneath the top/bottom walls so no horizontal seam remains
+  grassFitMargin: 1.0,          // exact inner-opening fit, corner to corner
+  grassZLift: 0.035,            // lift so grass clears the ground plane without overtaking pebbles/plants sitting on it
+  grassDensityJitterFrac: 0.035 // how far (as a fraction of the inner opening) each density-filler clone is offset
+};
+
+/** Toggle on during layout tuning to draw the cube's outer/inner bounds. Leave off for delivery. */
+const SHOW_GARDEN_DEBUG_BOUNDS = false;
+
+/**
+ * A small procedural turf texture for the continuous grass floor. The GLB
+ * contains separated clumps, so no amount of scaling can cover the empty
+ * space between its blades; this layer supplies the missing carpet while the
+ * original geometry remains above it for real depth and silhouettes.
+ */
+function createGrassCarpetTexture() {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#24470e";
+  ctx.fillRect(0, 0, size, size);
+
+  // Seeded noise keeps the texture stable across refreshes.
+  let seed = 0x6d2b79f5;
+  const random = () => {
+    seed = Math.imul(seed ^ (seed >>> 15), seed | 1);
+    seed ^= seed + Math.imul(seed ^ (seed >>> 7), seed | 61);
+    return ((seed ^ (seed >>> 14)) >>> 0) / 4294967296;
+  };
+
+  for (let i = 0; i < 3600; i++) {
+    const x = random() * size;
+    const y = random() * size;
+    const light = 18 + Math.floor(random() * 20);
+    const alpha = 0.18 + random() * 0.34;
+    ctx.fillStyle = `hsla(${92 + random() * 20}, 58%, ${light}%, ${alpha})`;
+    ctx.fillRect(x, y, 0.7 + random() * 1.4, 1.4 + random() * 3.2);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(7, 4);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return texture;
+}
+
+/**
+ * Handles loading, centering, scaling, and animating the 3D GLB garden model environment composed of multiple GLBs.
+ */
+class LivingGardenModel {
+  constructor(loadedModels) {
+    this.loadedModels = loadedModels;
+    this.model = new THREE.Group();
+
+    // --- Phase 1: measure the cube/frame's own bounds in the shared,
+    // as-authored local coordinate frame every GLB was exported into. This
+    // is the authoritative container — grass is fit inside it, not the
+    // other way around.
+    const cubeEntry = loadedModels.find((m) => m.name === "cube");
+    const groundEntry = loadedModels.find((m) => m.name === "ground");
+    const cubeLocalBox = cubeEntry ? new THREE.Box3().setFromObject(cubeEntry.gltf.scene) : null;
+    const groundLocalBox = groundEntry ? new THREE.Box3().setFromObject(groundEntry.gltf.scene) : null;
+    const groundSurfaceZ = groundLocalBox?.max.z;
+    let innerBounds = null;
+    if (cubeLocalBox) {
+      const cubeSize = cubeLocalBox.getSize(new THREE.Vector3());
+      const cubeCenter = cubeLocalBox.getCenter(new THREE.Vector3());
+      const halfX = (cubeSize.x / 2) * (1 - GARDEN_CONTAINMENT.cubeWallInsetX);
+      const halfY = (cubeSize.y / 2) * (1 - GARDEN_CONTAINMENT.cubeWallInsetY);
+      innerBounds = {
+        center: cubeCenter,
+        minX: cubeCenter.x - halfX, maxX: cubeCenter.x + halfX,
+        minY: cubeCenter.y - halfY, maxY: cubeCenter.y + halfY
+      };
+      console.debug("[Flight Garden] cube bounds", cubeLocalBox.min, cubeLocalBox.max,
+        "→ inner opening", innerBounds);
+    } else {
+      console.warn("[Flight Garden] cube.glb missing — grass containment skipped.");
+    }
+
+    this._grassMeshes = [];
+    this._grassCarpetTexture = createGrassCarpetTexture();
+
+    loadedModels.forEach(({ name, gltf }) => {
+      const sceneModel = gltf.scene;
+
+      // Enable shadows for meshes inside the model and make materials double-sided
+      sceneModel.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          if (child.material) {
+            const materials = Array.isArray(child.material) ? child.material : [child.material];
+            materials.forEach((mat) => {
+              mat.side = THREE.DoubleSide;
+              // The user-facing floor is all turf: re-skin the source ground
+              // as grass as well as placing the carpet above it. This ensures
+              // no brown soil can show through around sparse GLB clumps.
+              if (name === "ground") {
+                mat.map = this._grassCarpetTexture;
+                mat.color?.set(0x5f8c2a);
+                mat.roughness = 0.96;
+                mat.metalness = 0;
+                mat.needsUpdate = true;
+              }
+            });
+          }
+        }
+      });
+
+      if (name === "grass" && innerBounds) {
+        // Phase 3: contain grass inside the cube's inner opening. The mesh's
+        // own geometry sits far from its local (0,0,0) origin (it shares the
+        // scene's authored world coordinates), so scaling naively around
+        // that origin would fling it out of frame — scale around its own
+        // bounding-box centre instead. Fit X and Y independently because the
+        // cube's opening is much wider than the authored grass patch; a
+        // uniform "contain" scale leaves bare ground down both sides. The
+        // clipping planes below still provide a hard wall boundary.
+        const grassBox = new THREE.Box3().setFromObject(sceneModel);
+        const grassCenter = grassBox.getCenter(new THREE.Vector3());
+        const grassSize = grassBox.getSize(new THREE.Vector3());
+
+        const innerWidth = innerBounds.maxX - innerBounds.minX;
+        const innerHeight = innerBounds.maxY - innerBounds.minY;
+        const fitScaleX = (innerWidth / grassSize.x) * GARDEN_CONTAINMENT.grassFitMargin;
+        const fitScaleY = (innerHeight / grassSize.y) * GARDEN_CONTAINMENT.grassFitMargin;
+        const fitScaleZ = Math.min(fitScaleX, fitScaleY);
+
+        // The authored grass asset is a collection of separate clumps whose
+        // bounding box includes large empty regions. Cover the entire inner
+        // opening with turf first, then layer those clumps over it.
+        const carpetGeometry = new THREE.PlaneGeometry(
+          innerWidth * GARDEN_CONTAINMENT.grassFitMargin,
+          innerHeight * GARDEN_CONTAINMENT.grassFitMargin
+        );
+        const carpetMaterial = new THREE.MeshStandardMaterial({
+          map: this._grassCarpetTexture,
+          color: 0x5f8c2a,
+          roughness: 0.96,
+          metalness: 0,
+          side: THREE.DoubleSide
+        });
+        const grassCarpet = new THREE.Mesh(carpetGeometry, carpetMaterial);
+        // GROUND2.glb's visible soil surface sits above the grass asset's
+        // lowest vertex. Anchor the carpet to the measured top of the ground
+        // mesh so it cannot be hidden underneath the soil.
+        const carpetZ = Number.isFinite(groundSurfaceZ)
+          ? groundSurfaceZ + 0.012
+          : grassBox.min.z + GARDEN_CONTAINMENT.grassZLift;
+        grassCarpet.position.set(
+          innerBounds.center.x,
+          innerBounds.center.y,
+          carpetZ
+        );
+        grassCarpet.receiveShadow = true;
+        grassCarpet.renderOrder = -1;
+        this.model.add(grassCarpet);
+        this._grassMeshes.push(grassCarpet);
+
+        const placeGrass = (obj, dx, dy) => {
+          obj.scale.set(fitScaleX, fitScaleY, fitScaleZ);
+          obj.position.set(
+            innerBounds.center.x - grassCenter.x * fitScaleX + dx,
+            innerBounds.center.y - grassCenter.y * fitScaleY + dy,
+            grassCenter.z * (1 - fitScaleZ) + GARDEN_CONTAINMENT.grassZLift
+          );
+        };
+
+        placeGrass(sceneModel, 0, 0);
+        this.model.add(sceneModel);
+        sceneModel.traverse((c) => { if (c.isMesh) this._grassMeshes.push(c); });
+
+        // A couple of tightly-clustered density-filler clones (cheap — they
+        // share geometry/material by reference) to interleave extra tufts
+        // into the gaps between the sparse originals. Offsets are kept small
+        // relative to the fit margin so they stay inside innerBounds; the
+        // clipping planes added after the group is placed (Phase 4) are the
+        // hard guarantee regardless.
+        const jitterX = innerWidth * GARDEN_CONTAINMENT.grassDensityJitterFrac;
+        const jitterY = innerHeight * GARDEN_CONTAINMENT.grassDensityJitterFrac;
+        [[jitterX, jitterY * 0.6], [-jitterX * 0.8, -jitterY]].forEach(([dx, dy]) => {
+          const clone = sceneModel.clone(true);
+          placeGrass(clone, dx, dy);
+          this.model.add(clone);
+          clone.traverse((c) => { if (c.isMesh) this._grassMeshes.push(c); });
+        });
+        return;
+      }
+
+      this.model.add(sceneModel);
+    });
+
+    scene.add(this.model);
+
+    // Apply base rotation (so Y-up GLTF standard aligns with Z-up project coordinate system)
+    this.model.rotation.set(
+      GARDEN_MODEL_CONFIG.rotationX,
+      GARDEN_MODEL_CONFIG.rotationY,
+      GARDEN_MODEL_CONFIG.rotationZ
+    );
+
+    // Force update matrix so we can calculate accurate bounding box dimensions
+    this.model.updateMatrixWorld(true);
+
+    // Compute original unscaled dimensions after rotation
+    const originalBox = new THREE.Box3().setFromObject(this.model);
+    const originalSize = new THREE.Vector3();
+    originalBox.getSize(originalSize);
+
+    // Calculate scaling factor to fit garden bounds
+    const scaleX = GARDEN.width / originalSize.x;
+    const scaleY = GARDEN.height / originalSize.y;
+    const fitScale = Math.min(scaleX, scaleY) * GARDEN_MODEL_CONFIG.scale;
+    this.model.scale.set(fitScale, fitScale, fitScale);
+
+    // Force update matrix to apply the scale
+    this.model.updateMatrixWorld(true);
+
+    // Now compute the final scaled bounding box
+    const finalBox = new THREE.Box3().setFromObject(this.model);
+    const finalSize = new THREE.Vector3();
+    finalBox.getSize(finalSize);
+    const finalCenter = new THREE.Vector3();
+    finalBox.getCenter(finalCenter);
+
+    // Position: Center the model horizontally (X, Y)
+    this.model.position.x = -finalCenter.x + GARDEN_MODEL_CONFIG.offsetX;
+    this.model.position.y = -finalCenter.y + GARDEN_MODEL_CONFIG.offsetY;
+    // Set Z so that the bottom of the dome is at offsetZ
+    this.model.position.z = -finalBox.min.z + GARDEN_MODEL_CONFIG.offsetZ;
+
+    this.model.updateMatrixWorld(true);
+
+    // --- Phase 4: hard containment safety net. Regardless of the fit-scale
+    // math above, clip grass geometry against the cube's own *final*
+    // world-space inner opening so it can never render past the walls.
+    if (cubeEntry) {
+      const cubeWorldBox = new THREE.Box3().setFromObject(cubeEntry.gltf.scene);
+      const cubeWorldSize = cubeWorldBox.getSize(new THREE.Vector3());
+      const cubeWorldCenter = cubeWorldBox.getCenter(new THREE.Vector3());
+      const innerHalfX = (cubeWorldSize.x / 2) * (1 - GARDEN_CONTAINMENT.cubeWallInsetX);
+      const innerHalfY = (cubeWorldSize.y / 2) * (1 - GARDEN_CONTAINMENT.cubeWallInsetY);
+      const innerMinX = cubeWorldCenter.x - innerHalfX;
+      const innerMaxX = cubeWorldCenter.x + innerHalfX;
+      const innerMinY = cubeWorldCenter.y - innerHalfY;
+      const innerMaxY = cubeWorldCenter.y + innerHalfY;
+
+      const clipPlanes = [
+        new THREE.Plane(new THREE.Vector3(1, 0, 0), -innerMinX),
+        new THREE.Plane(new THREE.Vector3(-1, 0, 0), innerMaxX),
+        new THREE.Plane(new THREE.Vector3(0, 1, 0), -innerMinY),
+        new THREE.Plane(new THREE.Vector3(0, -1, 0), innerMaxY)
+      ];
+
+      renderer.localClippingEnabled = true;
+      this._grassMeshes.forEach((mesh) => {
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        mats.forEach((mat) => {
+          mat.clippingPlanes = clipPlanes;
+          mat.clipShadows = true;
+        });
+      });
+      this._grassClipPlanes = clipPlanes;
+
+      if (SHOW_GARDEN_DEBUG_BOUNDS) {
+        scene.add(new THREE.Box3Helper(cubeWorldBox, new THREE.Color(0xff0055)));
+        const innerBoxHelper = new THREE.Box3(
+          new THREE.Vector3(innerMinX, innerMinY, cubeWorldBox.min.z),
+          new THREE.Vector3(innerMaxX, innerMaxY, cubeWorldBox.max.z)
+        );
+        scene.add(new THREE.Box3Helper(innerBoxHelper, new THREE.Color(0x00ff88)));
+      }
+    }
+
+    // Exposed so a second, smaller instance of the hero flower can be grounded
+    // and scaled consistently for the paired terminal blooms.
+    this.fitScale = fitScale;
+    this.flowerGltf = loadedModels.find((m) => m.name === "flower")?.gltf ?? null;
+
+    // Stub properties to satisfy references to livingGarden.material in other functions (e.g. resize)
+    this.material = {
+      uniforms: {
+        uSharpenAmount: { value: 0 }
+      }
+    };
+  }
+
+
+  update(elapsed, master, activity) {
+    // Handle animations embedded within each GLTF model
+    this.loadedModels.forEach(({ gltf }) => {
+      if (gltf.animations && gltf.animations.length > 0) {
+        if (!gltf.mixer) {
+          gltf.mixer = new THREE.AnimationMixer(gltf.scene);
+          gltf.animations.forEach((clip) => {
+            gltf.mixer.clipAction(clip).play();
+          });
+        }
+      }
+
+      if (gltf.mixer) {
+        const last = gltf.lastElapsed || 0;
+        const dt = elapsed - last;
+        gltf.lastElapsed = elapsed;
+        if (dt > 0 && dt < 1) {
+          gltf.mixer.update(dt);
+        }
+      }
+    });
+  }
+
+  dispose() {
+    scene.remove(this.model);
+    this.loadedModels.forEach(({ gltf }) => {
+      gltf.scene.traverse((child) => {
+        if (child.isMesh) {
+          child.geometry.dispose();
+          if (child.material) {
+            const materials = Array.isArray(child.material) ? child.material : [child.material];
+            materials.forEach((m) => m.dispose?.());
+          }
+        }
+      });
+      if (gltf.mixer) {
+        gltf.mixer.stopAllActions?.() || gltf.mixer.uncacheRoot?.(gltf.scene);
+      }
+    });
+  }
+}
+
+/**
+ * Scales, centers and grounds `object` at world-space (x, y), matching the
+ * technique LivingGardenModel uses for the main garden group: measure its own
+ * bounding box *after* scaling, then offset so that box is centred on (x, y)
+ * and its lowest point sits on the shared ground level (GARDEN_MODEL_CONFIG's
+ * offsetZ — see the derivation in LivingGardenModel's constructor, where the
+ * whole garden group's world-space minimum Z reduces to exactly offsetZ).
+ * Reused here so a cloned model can be grounded correctly without guessing a
+ * z-position by eye.
+ */
+function placeGroundedClone(object, x, y, scale) {
+  object.scale.setScalar(scale);
+  object.position.set(0, 0, 0);
+  object.updateMatrixWorld(true);
+
+  const box = new THREE.Box3().setFromObject(object);
+  const center = box.getCenter(new THREE.Vector3());
+
+  object.position.x = x - center.x;
+  object.position.y = y - center.y;
+  object.position.z = GARDEN_MODEL_CONFIG.offsetZ - box.min.z;
+}
+
+/**
+ * Replace the single authored centre flower with two equally prominent,
+ * deliberately spaced blooms for Bengaluru Airport's Terminal 1 and
+ * Terminal 2. Add small plant clusters in the lower corners to close the
+ * remaining visual gaps without crowding the terminal gates.
+ */
+function arrangeTerminalGarden(gardenModel) {
+  if (!gardenModel.flowerGltf) {
+    console.warn("[Flight Garden] mainflower.glb not loaded — skipping terminal blooms.");
+    return;
+  }
+
+  const sourceFlower = gardenModel.flowerGltf.scene;
+  const secondFlower = sourceFlower.clone(true);
+  gardenModel.model.add(secondFlower);
+  gardenModel.model.updateMatrixWorld(true);
+
+  // Keep both flowers inside LivingGardenModel. They then inherit exactly the
+  // same scale, elevation and grounding as the originally visible flower.
+  // Move them in world units converted through the garden group's scale.
+  const arrangeFlower = (flower, target, rotation) => {
+    flower.rotation.z += rotation;
+    flower.scale.multiplyScalar(TERMINAL_FLOWER_SCALE);
+    gardenModel.model.updateMatrixWorld(true);
+    const center = new THREE.Box3()
+      .setFromObject(flower)
+      .getCenter(new THREE.Vector3());
+    flower.position.x += (target.x - center.x) / gardenModel.model.scale.x;
+    flower.position.y += (target.y - center.y) / gardenModel.model.scale.y;
+    flower.position.z += 0.16 / gardenModel.model.scale.z;
+    flower.updateMatrixWorld(true);
+  };
+
+  arrangeFlower(sourceFlower, TERMINAL_T1, -0.12);
+  arrangeFlower(secondFlower, TERMINAL, 0.12);
+
+  const plantsGltf = gardenModel.loadedModels.find(({ name }) => name === "plants")?.gltf;
+  if (!plantsGltf) return;
+
+  [
+    { x: -1.78, y: -1.48, rotation: -0.22 },
+    { x: 1.78, y: -1.48, rotation: 0.22 }
+  ].forEach(({ x, y, rotation }) => {
+    const cluster = plantsGltf.scene.clone(true);
+    gardenModel.model.add(cluster);
+    cluster.rotation.z += rotation;
+    cluster.scale.multiplyScalar(0.32);
+    gardenModel.model.updateMatrixWorld(true);
+
+    const center = new THREE.Box3()
+      .setFromObject(cluster)
+      .getCenter(new THREE.Vector3());
+    cluster.position.x += (x - center.x) / gardenModel.model.scale.x;
+    cluster.position.y += (y - center.y) / gardenModel.model.scale.y;
+    cluster.position.z += 0.14 / gardenModel.model.scale.z;
+    cluster.updateMatrixWorld(true);
+  });
+}
+
 class LivingGarden {
   /**
    * mediaAspect defaults to the plane's own aspect (an identity fit) — the
@@ -546,10 +1052,8 @@ class LivingGarden {
    * swell never feels like a metronome the way a single sin(t) does.
    */
   static breath(t) {
-    const s = 0.55 * Math.sin(t * 0.31)
-      + 0.30 * Math.sin(t * 0.47 + 1.3)
-      + 0.15 * Math.sin(t * 0.83 + 2.1);
-    return 0.5 + 0.5 * s;
+    // Constant output (no breathing animation)
+    return 0.5;
   }
 
   update(elapsed, master, activity) {
@@ -685,20 +1189,69 @@ async function loadGardenVideoTexture(url) {
   return { texture, video, mediaAspect, mediaResolution };
 }
 
-loadGardenVideoTexture("assets/gardenvideo.mp4?v=1")
-  .then(({ texture, mediaAspect, mediaResolution }) => {
-    livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/libs/draco/");
+
+/**
+ * Loads assets/fairytale_garden.glb as a 3D model environment.
+ */
+async function loadGardenModel(url) {
+  const loader = new GLTFLoader();
+  loader.setDRACOLoader(dracoLoader);
+  return new Promise((resolve, reject) => {
+    loader.load(
+      url,
+      (gltf) => resolve(gltf),
+      undefined,
+      (err) => reject(err)
+    );
+  });
+}
+
+const modelConfigs = [
+  { name: 'ground', url: 'assets/GROUND2.glb' },         // base terrain / apron (optimized replacement for groundplane.glb)
+  { name: 'pebbles', url: 'assets/pebbles.glb' },        // taxiway + path detailing
+  { name: 'plants', url: 'assets/plants-optimized.glb' },         // landscaping around both terminals
+  { name: 'flower', url: 'assets/mainflower.glb' },      // the terminal campus (T1 + T2 petals)
+  { name: 'grass', url: 'assets/grass2optimized.glb' },   // optimized grass model (~14.7 MB)
+  { name: 'cube', url: 'assets/cube.glb' }               // placeholder/test cube frame
+];
+
+Promise.all(
+  modelConfigs.map((cfg) =>
+    loadGardenModel(cfg.url)
+      .then((gltf) => ({ name: cfg.name, gltf }))
+      .catch((err) => {
+        console.warn(`[Flight Garden] Failed to load 3D model component "${cfg.name}" from ${cfg.url}:`, err);
+        return null;
+      })
+  )
+)
+  .then((results) => {
+    const loadedModels = results.filter((r) => r !== null);
+    if (loadedModels.length === 0) {
+      throw new Error("No 3D model components could be loaded.");
+    }
+    livingGarden = new LivingGardenModel(loadedModels);
+    arrangeTerminalGarden(livingGarden);
     resize();
   })
   .catch(async (err) => {
-    console.warn("[Flight Garden] Garden video unavailable, falling back to garden.png.", err);
-    const texture = await loadGardenTexture("assets/garden.png");
-    livingGarden = new LivingGarden(texture);
-    resize();
-  })
-  .catch((err) => {
-    // file:// or a missing asset — still reveal the airspace rather than a void
-    console.warn("[Flight Garden] Garden texture unavailable.", err);
+    console.warn("[Flight Garden] Garden 3D models unavailable, falling back to gardenvideo.mp4.", err);
+    try {
+      const { texture, mediaAspect, mediaResolution } = await loadGardenVideoTexture("assets/gardenvideo.mp4");
+      livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
+      resize();
+    } catch (videoErr) {
+      console.warn("[Flight Garden] Garden video fallback unavailable, falling back to garden.png.", videoErr);
+      try {
+        const texture = await loadGardenTexture("assets/garden.png");
+        livingGarden = new LivingGarden(texture);
+        resize();
+      } catch (pngErr) {
+        console.warn("[Flight Garden] Garden fallback texture unavailable — scene will render without a garden layer.", pngErr);
+      }
+    }
   })
   .finally(beginIntro);
 
@@ -712,6 +1265,16 @@ loadGardenVideoTexture("assets/gardenvideo.mp4?v=1")
 const routeLayer = new THREE.Group();
 routeLayer.renderOrder = 1;
 scene.add(routeLayer);
+
+/**
+ * BLR runs two parallel runway systems: North (09L/27R) and South (09R/27L).
+ * Each anchor is tagged with the system it abstractly represents — pairing
+ * index 0/2 as North and 1/3 as South keeps one arrival + one departure
+ * corridor per system, so both runways stay visibly active. The corridors
+ * themselves are still the same glowing garden paths (RunwayLights already
+ * strobes them on departure) — this only adds the real-world label.
+ */
+const runwaySystemForIndex = (i) => (i % 2 === 0 ? "09L/27R · North" : "09R/27L · South");
 
 /** Edge anchors — arrivals come in low over the left/lower meadow. */
 const ARRIVAL_ANCHORS = [
@@ -882,7 +1445,7 @@ function buildRouteSystem() {
   ARRIVAL_ANCHORS.forEach((anchor, i) => {
     const curve = corridorCurve(anchor, true);
     const angle = Math.atan2(anchor.y - TERMINAL.y, anchor.x - TERMINAL.x);
-    ARRIVAL_CORRIDORS.push({ anchor, curve, angle });
+    ARRIVAL_CORRIDORS.push({ anchor, curve, angle, runway: runwaySystemForIndex(i) });
 
     const line = buildCorridorLine(curve, COLOR.arrival, { fadeHead: 0.34, fadeTail: 0.12, peak: 0.90 });
     routeLayer.add(line);
@@ -897,7 +1460,7 @@ function buildRouteSystem() {
   DEPARTURE_ANCHORS.forEach((anchor, i) => {
     const curve = corridorCurve(anchor, false);
     const angle = Math.atan2(anchor.y - TERMINAL.y, anchor.x - TERMINAL.x);
-    DEPARTURE_CORRIDORS.push({ anchor, curve, angle });
+    DEPARTURE_CORRIDORS.push({ anchor, curve, angle, runway: runwaySystemForIndex(i) });
 
     const line = buildCorridorLine(curve, COLOR.departure, { fadeHead: 0.12, fadeTail: 0.36, peak: 0.75 });
     routeLayer.add(line);
@@ -982,14 +1545,29 @@ scene.add(gateLayer);
 
 const gates = [];
 
+/**
+ * Gate index → real-world-referenced pier id. The first T2_GATE_COUNT gates
+ * are Terminal 2's "C" pier (hero, garden-themed); the rest are Terminal 1's
+ * "D" pier (domestic). Contiguous index ranges keep each pier a contiguous
+ * arc of petals rather than interleaving the two terminals around the bloom.
+ */
+function gateIdentity(i) {
+  return i < T2_GATE_COUNT
+    ? { id: `C${i + 1}`, terminal: "T2" }
+    : { id: `D${i - T2_GATE_COUNT + 1}`, terminal: "T1" };
+}
+
 function buildGates() {
   const ringGeo = new THREE.RingGeometry(0.052, 0.068, 40);
 
   for (let i = 0; i < GATE_COUNT; i++) {
+    const { id, terminal } = gateIdentity(i);
+    const center = terminal === "T1" ? TERMINAL_T1 : TERMINAL;
+    const radius = terminal === "T1" ? GATE_RADIUS_T1 : GATE_RADIUS;
     const angle = -Math.PI * 0.55 + (i / GATE_COUNT) * Math.PI * 2;
     const position = new THREE.Vector3(
-      TERMINAL.x + Math.cos(angle) * GATE_RADIUS,
-      TERMINAL.y + Math.sin(angle) * GATE_RADIUS,
+      center.x + Math.cos(angle) * radius,
+      center.y + Math.sin(angle) * radius,
       ALT.ground
     );
 
@@ -1020,7 +1598,8 @@ function buildGates() {
 
     const label = document.createElement("div");
     label.className = "gate-label";
-    label.textContent = `G${i + 1}`;
+    label.classList.add(terminal === "T2" ? "gate-t2" : "gate-t1");
+    label.textContent = id;
     labelLayer.appendChild(label);
 
     // nudge the caption outward so it never covers its own ring
@@ -1029,7 +1608,8 @@ function buildGates() {
     );
 
     gates.push({
-      id: `G${i + 1}`,
+      id,
+      terminal,
       position,
       labelPos,
       angle,
@@ -1050,6 +1630,23 @@ function buildGates() {
 
 const isGateFree = (g) => !g.occupant && !g.reserved;
 const freeGates = () => gates.filter(isGateFree);
+
+/** Indian domestic sectors — everything else routes through the T2 (hero) pier. */
+const DOMESTIC_CODES = new Set(["BLR", "DEL", "BOM", "MAA", "HYD", "CCU", "GOI"]);
+
+/** Which pier a flight belongs on, mirroring BLR's real domestic/international split. */
+function routeTerminal(flight) {
+  const other = flight.kind === "arrival" ? flight.origin : flight.destination;
+  return DOMESTIC_CODES.has(other) ? "T1" : "T2";
+}
+
+/** Gates on the flight's own pier first; falls back to any free gate rather
+ *  than stalling the sim if that pier happens to be full. */
+function freeGatesFor(flight) {
+  const free = freeGates();
+  const onPier = free.filter((g) => g.terminal === routeTerminal(flight));
+  return onPier.length ? onPier : free;
+}
 
 /* ---------------- gate reactions to flight events ---------------- */
 
@@ -1196,10 +1793,13 @@ function updateGates(dt, elapsed, master) {
 const labelLayer = document.getElementById("labelLayer");
 
 const ZONES = [
-  { kind: "terminal", name: "Terminal Bloom", note: "Gates G1–G6", pos: new THREE.Vector3(TERMINAL.x, TERMINAL.y + 0.98, ALT.ground) },
+  { kind: "terminal", name: "Terminal 1", note: "Domestic · D1–D4", pos: new THREE.Vector3(TERMINAL_T1.x, TERMINAL_T1.y + 0.72, ALT.ground) },
+  { kind: "terminal", name: "Terminal 2", note: "Garden Terminal · C1–C6", pos: new THREE.Vector3(TERMINAL.x, TERMINAL.y + 0.72, ALT.ground) },
   { kind: "arrival", name: "Arrival Meadow", note: "Inbound traffic", pos: new THREE.Vector3(-1.62, -1.66, ALT.ground) },
   { kind: "departure", name: "Departure Trail", note: "Outbound climb", pos: new THREE.Vector3(1.28, 1.56, ALT.ground) },
-  { kind: "holding", name: "Holding Pattern", note: "Stacked, waiting", pos: new THREE.Vector3(0.68, -1.54, ALT.ground) }
+  { kind: "holding", name: "Holding Pattern", note: "Stacked, waiting", pos: new THREE.Vector3(0.68, -1.54, ALT.ground) },
+  { kind: "runway", name: "North Runway", note: "09L / 27R", pos: new THREE.Vector3(0.05, 1.82, ALT.ground) },
+  { kind: "runway", name: "South Runway", note: "09R / 27L", pos: new THREE.Vector3(-0.55, -1.86, ALT.ground) }
 ];
 
 function buildZoneLabels() {
@@ -1575,6 +2175,10 @@ class TrailRibbon {
 
     this._perp = new THREE.Vector3();
     this._dir = new THREE.Vector3();
+    this._smoothPoints = Array.from(
+      { length: TRAIL_POINTS },
+      () => new THREE.Vector3()
+    );
   }
 
   /** Re-tint the ribbon for a flight state, blending the livery into the tail. */
@@ -1614,11 +2218,25 @@ class TrailRibbon {
     const n = pts.length;
     const width = this.baseWidth * this.widthScale;
 
+    // Round the raw position history before building the ribbon. A compact
+    // 1-2-1 filter removes the ruler-like joints while retaining the
+    // butterfly's actual turns and loops.
     for (let i = 0; i < TRAIL_POINTS; i++) {
       const j = Math.min(i, n - 1);
-      const p = pts[j];                    // collapse the unused tail
-      const prev = pts[Math.max(0, j - 1)];
-      const next = pts[Math.min(j + 1, n - 1)];
+      const before = pts[Math.max(0, j - 1)];
+      const current = pts[j];
+      const after = pts[Math.min(j + 1, n - 1)];
+      this._smoothPoints[i]
+        .copy(current)
+        .multiplyScalar(0.5)
+        .addScaledVector(before, 0.25)
+        .addScaledVector(after, 0.25);
+    }
+
+    for (let i = 0; i < TRAIL_POINTS; i++) {
+      const p = this._smoothPoints[i];
+      const prev = this._smoothPoints[Math.max(0, i - 1)];
+      const next = this._smoothPoints[Math.min(i + 1, TRAIL_POINTS - 1)];
 
       this._dir.subVectors(next, prev);
       if (this._dir.lengthSq() < 1e-8) this._dir.set(1, 0, 0);
@@ -1677,13 +2295,23 @@ class TrailRibbon {
 
 let flightSeq = 0;
 
-/** `airlineCode` pins the carrier — a parked aircraft keeps its livery when it
- *  turns around into a departure, so the flight number must match it too. */
-function makeFlight(kind, airportCode, airlineCode) {
+/**
+ * `airlineCode` pins the carrier — a parked aircraft keeps its livery when it
+ * turns around into a departure, so the flight number must match it too.
+ * `terminal` ("T1"/"T2"), when given, biases the route to a city on that
+ * pier — used so a flight seeded straight onto a gate matches its pier.
+ */
+function makeFlight(kind, airportCode, airlineCode, terminal) {
   const code = airlineCode ?? pick(AIRLINE_CODES);
   const spec = AIRLINES[code];
   const airport = AIRPORTS[airportCode];
-  const other = pick(airport.routes);
+
+  let pool = airport.routes;
+  if (terminal) {
+    const onPier = airport.routes.filter((c) => DOMESTIC_CODES.has(c) === (terminal === "T1"));
+    if (onPier.length) pool = onPier;
+  }
+  const other = pick(pool);
 
   flightSeq++;
 
@@ -1734,6 +2362,8 @@ class Butterfly {
     this.wanderSeed = rand(0, Math.PI * 2);
     this.wanderAmp = rand(0.012, 0.030);
     this.lane = rand(-0.09, 0.09);   // lateral offset so shared corridors spread
+    this.weaveAmp = rand(0.035, 0.070);
+    this.weaveTurns = rand(2.2, 3.6);
 
     // wing character: a unique speckle field, and how much livery shows through
     this.seed = Math.random();
@@ -1953,7 +2583,7 @@ class Butterfly {
 
     // Same aircraft, same livery — so the same carrier, and a flight number
     // drawn from that carrier's range rather than a random one.
-    this.flight = makeFlight("departure", sim.code, this.airline.code);
+    this.flight = makeFlight("departure", sim.code, this.airline.code, this.gate.terminal);
 
     this.position.copy(this.gate.position);
     this.mesh.position.copy(this.position);
@@ -2052,7 +2682,11 @@ class Butterfly {
 
     // Flights share four corridors; nudge each one sideways, most at mid-path,
     // so they read as a stream of individual aircraft rather than a queue.
-    const spread = Math.sin(Math.PI * this.u) * this.lane;
+    const envelope = Math.sin(Math.PI * this.u);
+    const weave = Math.sin(
+      this.u * Math.PI * 2 * this.weaveTurns + this.wanderSeed
+    ) * this.weaveAmp * envelope;
+    const spread = envelope * this.lane + weave;
     this.position.x -= this._tangent.y * spread;
     this.position.y += this._tangent.x * spread;
 
@@ -2141,10 +2775,8 @@ class Butterfly {
 
   /** Weightless drift, applied on top of the flight path. */
   applyBreeze(dt, elapsed) {
-    if (this.state === "parked") return;
-    const amp = this.state === "boarding" ? this.wanderAmp * 0.3 : this.wanderAmp;
-    this.position.x += Math.sin(elapsed * 1.4 + this.wanderSeed) * amp * dt;
-    this.position.y += Math.cos(elapsed * 1.1 + this.wanderSeed * 1.7) * amp * dt;
+    // Breeze physics disabled
+    return;
   }
 
   /** Heading from the tangent, bank from the rate of turn. */
@@ -2289,11 +2921,12 @@ const inAirCount = () =>
  * swallow that, so no organic arrival would ever enter the stack.
  */
 function spawnArrival(forceHold) {
-  const free = freeGates();
-  if (!free.length || inAirCount() >= sim.maxInAir) return null;
+  if (!freeGates().length || inAirCount() >= sim.maxInAir) return null;
 
-  const gate = pick(free);
+  // Pick the flight before the gate so it lands on the correct pier —
+  // domestic sectors taxi to the T1 petals, everything else to T2.
   const flight = makeFlight("arrival", sim.code);
+  const gate = pick(freeGatesFor(flight));
   const b = new Butterfly(flight, gate, { forceHold });
 
   gate.reserved = b;
@@ -2302,7 +2935,7 @@ function spawnArrival(forceHold) {
 }
 
 function spawnParked(gate) {
-  const flight = makeFlight("arrival", sim.code);
+  const flight = makeFlight("arrival", sim.code, undefined, gate.terminal);
   const b = new Butterfly(flight, gate, { spawnParked: true });
   butterflies.push(b);
   return b;
@@ -2514,7 +3147,7 @@ let pinned = null;
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
-/** e.g. "AI 204 · Arriving · Gate G3" */
+/** e.g. "AI 204 · Arriving · Gate C3" */
 function writeTooltip(b) {
   ui.tooltip.innerHTML =
     `<span class="tt-accent">${b.flight.id}</span> · ${b.statusLabel}` +
@@ -2640,8 +3273,14 @@ function updateIntro() {
   master = easeOutCubic(clamp((introTime - 0.35) / 2.0, 0, 1));
 
   // slow dolly-in: the garden settles into frame rather than snapping
-  const t = easeOutCubic(clamp(introTime / 2.6, 0, 1));
-  camera.position.z = lerp(cameraStart, cameraEnd, t);
+  if (introTime < 2.6) {
+    const t = easeOutCubic(clamp(introTime / 2.6, 0, 1));
+    camera.position.z = lerp(cameraStart, cameraEnd, t);
+    if (controls) {
+      controls.target.set(0, 0, 0);
+      controls.update();
+    }
+  }
 }
 
 /* =================================================================
@@ -2678,8 +3317,7 @@ function updateParallax(dt, elapsed) {
   parallax.x += (parallax.tx - parallax.x) * k;
   parallax.y += (parallax.ty - parallax.y) * k;
 
-  camera.position.x = parallax.x * PARALLAX_X;
-  camera.position.y = -parallax.y * PARALLAX_Y;
+  // Camera coordinates are managed by OrbitControls to support full 3D interactive manipulation.
 }
 
 /* =================================================================
@@ -2762,6 +3400,8 @@ function animate() {
 
   const dt = Math.min(clock.getDelta(), MAX_DT);
   elapsed += dt;
+
+  if (controls) controls.update();
 
   updateIntro();
   updateParallax(dt, elapsed);

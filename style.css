@@ -159,6 +159,7 @@ html, body {
 .zone-label[data-kind="departure"]{ color: var(--amber); }
 .zone-label[data-kind="holding"]  { color: rgba(255,255,255,0.7); }
 .zone-label[data-kind="terminal"] { color: #9fe6b8; }
+.zone-label[data-kind="runway"]   { color: rgba(196, 196, 255, 0.68); }
 
 .gate-label {
   font-family: var(--mono);
@@ -174,6 +175,13 @@ html, body {
   backdrop-filter: blur(4px);
   transition: opacity 0.5s ease, color 0.4s ease, border-color 0.4s ease;
 }
+
+/* Idle tint distinguishing the two terminals sharing the bloom — Terminal 2
+   (Garden Terminal, hero) reads mint like the terminal-zone label; Terminal 1
+   (Domestic Pier) reads a warmer neutral. Both are overridden by .occupied /
+   .inbound below once a flight actually claims the gate. */
+.gate-label.gate-t2 { border-color: rgba(159, 230, 184, 0.22); }
+.gate-label.gate-t1 { border-color: rgba(255, 196, 107, 0.18); }
 
 .gate-label.occupied {
   color: #fff;
@@ -735,8 +743,8 @@ html, body {
   /* keep the one note that names the gates, since the captions are hidden */
   .zone-label[data-kind="terminal"] .zl-note { display: block; }
 
-  /* Six gate captions collide at this scale. The rings still pulse, and
-     "Gates G1–G6" under Terminal Bloom carries the meaning. */
+  /* Ten gate captions collide at this scale. The rings still pulse, and
+     "T2 · C1–C6 · T1 · D1–D4" under Kempegowda Bloom carries the meaning. */
   .gate-label { display: none; }
 
   .titlecard { bottom: 28vh; }
