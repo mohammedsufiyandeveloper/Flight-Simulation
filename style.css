@@ -755,6 +755,95 @@ html, body {
   .detail-grid { grid-template-columns: 1fr 1fr; gap: 10px 8px; }
 }
 
+/*
+ * Dedicated 195 × 390 portrait display.
+ * The garden remains a centred landscape diorama while controls occupy the
+ * otherwise-unused black space above and below it.
+ */
+@media (max-width: 240px) and (max-height: 460px) and (orientation: portrait) {
+  :root {
+    --pad: 7px;
+    --radius: 9px;
+    --radius-sm: 6px;
+  }
+
+  .stage { inset: 0; }
+
+  .hud {
+    display: block;
+    padding: 0;
+  }
+
+  .tower {
+    position: fixed;
+    top: max(5px, env(safe-area-inset-top));
+    left: 5px;
+    right: 5px;
+    width: auto;
+    padding: 7px;
+    border-radius: 9px;
+  }
+
+  .tower-head { gap: 5px; }
+  .live-dot { width: 4px; height: 4px; }
+  .tower-title {
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+  }
+  .tower-sub { display: none; }
+
+  .select-wrap { margin-top: 6px; }
+  .select-wrap::after {
+    right: 8px;
+    width: 4px;
+    height: 4px;
+  }
+  #airportSelect {
+    height: 25px;
+    padding: 3px 22px 3px 8px;
+    font-size: 9px;
+    border-radius: 6px;
+  }
+
+  .stats {
+    position: fixed;
+    right: 5px;
+    bottom: max(5px, env(safe-area-inset-bottom));
+    left: 5px;
+    width: auto;
+    padding: 6px 4px;
+    border-radius: 9px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .stat,
+  .stat:first-child,
+  .stat:last-child {
+    min-width: 0;
+    gap: 2px;
+    padding: 0 2px;
+  }
+  .stat-value { font-size: 13px; }
+  .stat-label {
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 5.5px;
+    letter-spacing: 0.01em;
+    text-overflow: clip;
+  }
+
+  .legend,
+  .detail,
+  .tooltip,
+  .zone-label,
+  .gate-label {
+    display: none !important;
+  }
+
+  .titlecard { display: none; }
+}
+
 /* Landscape phones: keep the stage clear */
 @media (max-height: 460px) and (orientation: landscape) {
   .legend { display: none; }

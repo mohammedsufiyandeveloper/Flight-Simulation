@@ -274,8 +274,6 @@ function initControls() {
   controls.maxPolarAngle = Math.PI / 2 - 0.05; // Don't go below ground level
   controls.minDistance = 2;
   controls.maxDistance = 25;
-  controls.enableRotate = false; // Disable rotation as requested
-  controls.enablePan = false;    // Disable panning to keep the garden centered
 }
 
 initControls();
