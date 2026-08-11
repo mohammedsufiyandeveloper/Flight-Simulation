@@ -46,11 +46,11 @@ const GARDEN = {
 };
 
 /** Two clearly separated terminal blooms, arranged side by side in the garden. */
-const TERMINAL = new THREE.Vector3(0.88, -0.18, 0.30);
+const TERMINAL = new THREE.Vector3(1.18, -0.18, 0.30);
 
 /** Terminal 1 and Terminal 2 use matching, separately positioned blooms. */
-const TERMINAL_T1 = new THREE.Vector3(-0.88, -0.18, 0.30);
-const TERMINAL_FLOWER_SCALE = 0.8;
+const TERMINAL_T1 = new THREE.Vector3(-1.18, -0.18, 0.30);
+const TERMINAL_FLOWER_SCALE = 0.52;
 
 /**
  * The garden video (gardenanimation.mp4) doesn't share the plane's aspect —
@@ -102,8 +102,8 @@ const HOLD_RADIUS = 1.20;
 const T2_GATE_COUNT = 6;   // Terminal 2 · Garden Terminal · petals C1–C6
 const T1_GATE_COUNT = 4;   // Terminal 1 · Domestic Pier   · petals D1–D4
 const GATE_COUNT = T1_GATE_COUNT + T2_GATE_COUNT;
-const GATE_RADIUS = 0.36;
-const GATE_RADIUS_T1 = GATE_RADIUS;
+const GATE_RADIUS = 0.34;
+const GATE_RADIUS_T1 = 0.28;
 
 const MAX_DT = 1 / 24;  // clamp so tab-switches never teleport flights
 
@@ -269,11 +269,7 @@ let controls = null;
 
 function initControls() {
   controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.05;
-  controls.maxPolarAngle = Math.PI / 2 - 0.05; // Don't go below ground level
-  controls.minDistance = 2;
-  controls.maxDistance = 25;
+  controls.enabled = false; // Disable all camera controls / user interaction
 }
 
 initControls();
@@ -586,10 +582,10 @@ const GARDEN_MODEL_CONFIG = {
  * not hand-picked against a single render.
  */
 const GARDEN_CONTAINMENT = {
-  cubeWallInsetX: 0.04,         // measured left/right inner wall thickness
-  cubeWallInsetY: 0.0,          // extend turf beneath the top/bottom walls so no horizontal seam remains
+  cubeWallInsetX: -0.015,       // expand the PNG slightly beneath the left/right inner wall edges
+  cubeWallInsetY: -0.015,       // expand the PNG slightly beneath the top/bottom inner wall edges
   grassFitMargin: 1.0,          // exact inner-opening fit, corner to corner
-  grassZLift: 0.035,            // lift so grass clears the ground plane without overtaking pebbles/plants sitting on it
+  grassZLift: 0.08,             // lift so grass is brought more front / closer to camera and covers the ground
   grassDensityJitterFrac: 0.035 // how far (as a fraction of the inner opening) each density-filler clone is offset
 };
 
@@ -642,7 +638,7 @@ function createGrassCarpetTexture() {
  * Handles loading, centering, scaling, and animating the 3D GLB garden model environment composed of multiple GLBs.
  */
 class LivingGardenModel {
-  constructor(loadedModels) {
+  constructor(loadedModels, grassTexture = null) {
     this.loadedModels = loadedModels;
     this.model = new THREE.Group();
 
@@ -673,7 +669,11 @@ class LivingGardenModel {
     }
 
     this._grassMeshes = [];
-    this._grassCarpetTexture = createGrassCarpetTexture();
+    this._grassCarpetTexture = grassTexture;
+    if (this._grassCarpetTexture) {
+      this._grassCarpetTexture.colorSpace = THREE.SRGBColorSpace;
+      this._grassCarpetTexture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    }
 
     loadedModels.forEach(({ name, gltf }) => {
       const sceneModel = gltf.scene;
@@ -690,13 +690,6 @@ class LivingGardenModel {
               // The user-facing floor is all turf: re-skin the source ground
               // as grass as well as placing the carpet above it. This ensures
               // no brown soil can show through around sparse GLB clumps.
-              if (name === "ground") {
-                mat.map = this._grassCarpetTexture;
-                mat.color?.set(0x5f8c2a);
-                mat.roughness = 0.96;
-                mat.metalness = 0;
-                mat.needsUpdate = true;
-              }
             });
           }
         }
@@ -785,6 +778,35 @@ class LivingGardenModel {
       this.model.add(sceneModel);
     });
 
+    // Project the supplied transparent grass PNG over the ground GLB. The
+    // cube's measured opening is the single source of truth for placement,
+    // so the layer remains centred and contained if either GLB is replaced.
+    if (this._grassCarpetTexture && innerBounds) {
+      const innerWidth = innerBounds.maxX - innerBounds.minX;
+      const innerHeight = innerBounds.maxY - innerBounds.minY;
+      const grassLayer = new THREE.Mesh(
+        new THREE.PlaneGeometry(innerWidth, innerHeight),
+        new THREE.MeshStandardMaterial({
+          map: this._grassCarpetTexture,
+          transparent: true,
+          alphaTest: 0.03,
+          roughness: 0.92,
+          metalness: 0,
+          side: THREE.DoubleSide
+        })
+      );
+      grassLayer.name = "grass-png-floor";
+      grassLayer.position.set(
+        innerBounds.center.x,
+        innerBounds.center.y,
+        (Number.isFinite(groundSurfaceZ) ? groundSurfaceZ : 0) + GARDEN_CONTAINMENT.grassZLift
+      );
+      grassLayer.receiveShadow = true;
+      grassLayer.renderOrder = 1;
+      this.model.add(grassLayer);
+      this._grassMeshes.push(grassLayer);
+    }
+
     scene.add(this.model);
 
     // Apply base rotation (so Y-up GLTF standard aligns with Z-up project coordinate system)
@@ -832,6 +854,7 @@ class LivingGardenModel {
     if (cubeEntry) {
       const cubeWorldBox = new THREE.Box3().setFromObject(cubeEntry.gltf.scene);
       const cubeWorldSize = cubeWorldBox.getSize(new THREE.Vector3());
+      this.cubeSize = cubeWorldSize; // Expose final world-space cube size for camera framing
       const cubeWorldCenter = cubeWorldBox.getCenter(new THREE.Vector3());
       const innerHalfX = (cubeWorldSize.x / 2) * (1 - GARDEN_CONTAINMENT.cubeWallInsetX);
       const innerHalfY = (cubeWorldSize.y / 2) * (1 - GARDEN_CONTAINMENT.cubeWallInsetY);
@@ -966,9 +989,9 @@ function arrangeTerminalGarden(gardenModel) {
   // Keep both flowers inside LivingGardenModel. They then inherit exactly the
   // same scale, elevation and grounding as the originally visible flower.
   // Move them in world units converted through the garden group's scale.
-  const arrangeFlower = (flower, target, rotation) => {
+  const arrangeFlower = (flower, target, rotation, scaleFactor) => {
     flower.rotation.z += rotation;
-    flower.scale.multiplyScalar(TERMINAL_FLOWER_SCALE);
+    flower.scale.multiplyScalar(scaleFactor);
     gardenModel.model.updateMatrixWorld(true);
     const center = new THREE.Box3()
       .setFromObject(flower)
@@ -979,8 +1002,9 @@ function arrangeTerminalGarden(gardenModel) {
     flower.updateMatrixWorld(true);
   };
 
-  arrangeFlower(sourceFlower, TERMINAL_T1, -0.12);
-  arrangeFlower(secondFlower, TERMINAL, 0.12);
+  // Increase sizes: T2 is 0.88, T1 is 0.76 (making T1 a little bigger)
+  arrangeFlower(sourceFlower, TERMINAL_T1, -0.12, 0.76);
+  arrangeFlower(secondFlower, TERMINAL, 0.12, 0.88);
 
   const plantsGltf = gardenModel.loadedModels.find(({ name }) => name === "plants")?.gltf;
   if (!plantsGltf) return;
@@ -1211,29 +1235,34 @@ async function loadGardenModel(url) {
 const modelConfigs = [
   { name: 'ground', url: 'assets/GROUND2.glb' },         // base terrain / apron (optimized replacement for groundplane.glb)
   { name: 'pebbles', url: 'assets/pebbles.glb' },        // taxiway + path detailing
-  { name: 'plants', url: 'assets/plants-optimized.glb' },         // landscaping around both terminals
+  { name: 'plants', url: '' },         // landscaping around both terminals
   { name: 'flower', url: 'assets/mainflower.glb' },      // the terminal campus (T1 + T2 petals)
-  { name: 'grass', url: 'assets/grass2optimized.glb' },   // optimized grass model (~14.7 MB)
   { name: 'cube', url: 'assets/cube.glb' }               // placeholder/test cube frame
 ];
 
-Promise.all(
-  modelConfigs.map((cfg) =>
+const grassTexturePromise = new Promise((resolve, reject) => {
+  new THREE.TextureLoader().load('assets/grass.png', resolve, undefined, reject);
+});
+
+Promise.all([
+  Promise.all(modelConfigs.map((cfg) =>
     loadGardenModel(cfg.url)
       .then((gltf) => ({ name: cfg.name, gltf }))
       .catch((err) => {
         console.warn(`[Flight Garden] Failed to load 3D model component "${cfg.name}" from ${cfg.url}:`, err);
         return null;
       })
-  )
-)
-  .then((results) => {
+  )),
+  grassTexturePromise
+])
+  .then(([results, grassTexture]) => {
     const loadedModels = results.filter((r) => r !== null);
     if (loadedModels.length === 0) {
       throw new Error("No 3D model components could be loaded.");
     }
-    livingGarden = new LivingGardenModel(loadedModels);
+    livingGarden = new LivingGardenModel(loadedModels, grassTexture);
     arrangeTerminalGarden(livingGarden);
+    initHUDToggle();
     resize();
   })
   .catch(async (err) => {
@@ -1568,7 +1597,7 @@ function buildGates() {
     const position = new THREE.Vector3(
       center.x + Math.cos(angle) * radius,
       center.y + Math.sin(angle) * radius,
-      ALT.ground
+      ALT.ground + 0.18
     );
 
     const marker = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
@@ -1581,6 +1610,7 @@ function buildGates() {
     }));
     marker.position.copy(position);
     marker.renderOrder = 4;
+    marker.visible = false; // Hide the ring marker outline mesh
     gateLayer.add(marker);
 
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -2213,7 +2243,8 @@ class TrailRibbon {
       this.mesh.visible = false;
       return;
     }
-    this.mesh.visible = true;
+    this.mesh.visible = false; // Force trail to be invisible
+    return; // Skip geometry calculations since it's hidden
 
     const n = pts.length;
     const width = this.baseWidth * this.widthScale;
@@ -2400,6 +2431,7 @@ class Butterfly {
     this.mesh = new THREE.Group();
     this.mesh.rotation.order = "ZYX";   // heading → bank → pitch
     this.mesh.renderOrder = 10;
+    this.mesh.scale.setScalar(0.6);      // Reduce butterfly size by 40%
     scene.add(this.mesh);
 
     // wings: two half-planes sharing a centreline, each on its own pivot
@@ -2803,7 +2835,7 @@ class Butterfly {
 
     // altitude reads as scale: higher flights sit smaller against the garden
     const altitude = clamp((this.position.z - ALT.ground) / (ALT.cruise - ALT.ground), 0, 1);
-    this.mesh.scale.setScalar(1 - altitude * 0.22);
+    this.mesh.scale.setScalar(0.48 * (1 - altitude * 0.22));
 
     this.mesh.rotation.z = this.heading - Math.PI / 2;
     this.mesh.rotation.y = this.bank;
@@ -3336,8 +3368,14 @@ function updateParallax(dt, elapsed) {
  * bleeds to the screen edges instead of floating in a sea of black.
  */
 function fitCamera() {
-  const focusWidth = GARDEN.width;
-  const focusHeight = GARDEN.height;
+  let focusWidth = GARDEN.width;
+  let focusHeight = GARDEN.height;
+
+  if (livingGarden && livingGarden.cubeSize) {
+    // Zoom out the model by setting a wider framing boundary (65% margin padding)
+    focusWidth = livingGarden.cubeSize.x * 1.65;
+    focusHeight = livingGarden.cubeSize.y * 1.65;
+  }
 
   const fovY = THREE.MathUtils.degToRad(camera.fov);
   const distForHeight = (focusHeight / 2) / Math.tan(fovY / 2);
@@ -3345,8 +3383,8 @@ function fitCamera() {
   const fovX = 2 * Math.atan(Math.tan(fovY / 2) * camera.aspect);
   const distForWidth = (focusWidth / 2) / Math.tan(fovX / 2);
 
-  cameraEnd = Math.max(distForHeight, distForWidth);
-  cameraStart = cameraEnd * 1.28;
+  cameraEnd = Math.min(distForHeight, distForWidth);
+  cameraStart = cameraEnd;
 
   if (!introStarted || introTime > 2.6) camera.position.z = cameraEnd;
 }
@@ -3355,7 +3393,7 @@ function resize() {
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
 
-  // Disable resolution cap for 100% native quality
+  // Use native screen pixel ratio and resolution for perfect native crispness
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(w, h, false);
   if (composer) composer.setSize(w, h);
@@ -3373,6 +3411,32 @@ function resize() {
   }
 
   labelMetricsDirty = true;   // type size changes across breakpoints
+}
+
+/**
+ * Creates and appends a floating pill-shaped button to toggle the entire HUD overlay.
+ */
+function initHUDToggle() {
+  const hud = document.querySelector(".hud");
+  if (!hud) return;
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.className = "hud-toggle-btn";
+
+  const label = document.createElement("span");
+  label.textContent = "SHOW UI";
+  toggleBtn.appendChild(label);
+
+  document.body.appendChild(toggleBtn);
+
+  const toggleHUD = () => {
+    const isActive = hud.classList.toggle("hud-active");
+    toggleBtn.classList.toggle("hud-active-btn", isActive);
+    label.textContent = isActive ? "HIDE UI" : "SHOW UI";
+  };
+
+  toggleBtn.addEventListener("click", toggleHUD);
 }
 
 const _bufferSize = new THREE.Vector2();

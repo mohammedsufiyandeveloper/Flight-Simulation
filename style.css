@@ -3,34 +3,34 @@
    ============================================================= */
 
 :root {
-  --bg:            #05070a;
+  --bg: #05070a;
 
-  --glass:         rgba(10, 16, 22, 0.58);
-  --glass-hi:      rgba(255, 255, 255, 0.055);
-  --stroke:        rgba(255, 255, 255, 0.10);
-  --stroke-soft:   rgba(255, 255, 255, 0.055);
+  --glass: rgba(10, 16, 22, 0.58);
+  --glass-hi: rgba(255, 255, 255, 0.055);
+  --stroke: rgba(255, 255, 255, 0.10);
+  --stroke-soft: rgba(255, 255, 255, 0.055);
 
-  --text:          #e9eff3;
-  --muted:         rgba(233, 239, 243, 0.52);
-  --faint:         rgba(233, 239, 243, 0.30);
+  --text: #e9eff3;
+  --muted: rgba(233, 239, 243, 0.52);
+  --faint: rgba(233, 239, 243, 0.30);
 
-  --cyan:          #62dcff;
-  --amber:         #ffc46b;
-  --soft-white:    rgba(255, 255, 255, 0.82);
+  --cyan: #62dcff;
+  --amber: #ffc46b;
+  --soft-white: rgba(255, 255, 255, 0.82);
 
-  --radius:        16px;
-  --radius-sm:     10px;
+  --radius: 16px;
+  --radius-sm: 10px;
 
-  --shadow:        0 24px 60px -20px rgba(0, 0, 0, 0.85),
-                   0 2px 10px -2px rgba(0, 0, 0, 0.6);
+  --shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.85),
+    0 2px 10px -2px rgba(0, 0, 0, 0.6);
 
-  --pad:           16px;
-  --blur:          blur(22px) saturate(140%);
+  --pad: 16px;
+  --blur: blur(22px) saturate(140%);
 
   --font: "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont,
-          "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: "SF Mono", "JetBrains Mono", ui-monospace, "Cascadia Mono",
-          "Roboto Mono", Menlo, Consolas, monospace;
+    "Roboto Mono", Menlo, Consolas, monospace;
 
   /* HUD layout variables for desktop */
   --hud-padding: clamp(14px, 2.2vw, 28px);
@@ -39,9 +39,12 @@
   --right-col-width: clamp(240px, 20vw, 300px);
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   height: 100%;
@@ -56,8 +59,10 @@ html, body {
 
 .sr-only {
   position: absolute;
-  width: 1px; height: 1px;
-  padding: 0; margin: -1px;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
@@ -71,15 +76,6 @@ html, body {
 .stage {
   position: fixed;
   inset: 0;
-}
-
-@media (min-width: 721px) {
-  .stage {
-    top: var(--hud-padding);
-    bottom: var(--hud-padding);
-    left: calc(var(--left-col-width) + var(--hud-padding) + var(--hud-gap));
-    right: calc(var(--right-col-width) + var(--hud-padding) + var(--hud-gap));
-  }
 }
 
 #scene {
@@ -110,11 +106,17 @@ html, body {
 .zone-label,
 .gate-label {
   position: absolute;
-  top: 0; left: 0;
+  top: 0;
+  left: 0;
   white-space: nowrap;
   opacity: 0;
   transition: opacity 0.5s ease;
   will-change: transform, opacity;
+  display: none !important;
+}
+
+.zone-label[data-kind="terminal"] {
+  display: flex !important;
 }
 
 .zone-label {
@@ -155,11 +157,25 @@ html, body {
   opacity: 0.45;
 }
 
-.zone-label[data-kind="arrival"]  { color: var(--cyan); }
-.zone-label[data-kind="departure"]{ color: var(--amber); }
-.zone-label[data-kind="holding"]  { color: rgba(255,255,255,0.7); }
-.zone-label[data-kind="terminal"] { color: #9fe6b8; }
-.zone-label[data-kind="runway"]   { color: rgba(196, 196, 255, 0.68); }
+.zone-label[data-kind="arrival"] {
+  color: var(--cyan);
+}
+
+.zone-label[data-kind="departure"] {
+  color: var(--amber);
+}
+
+.zone-label[data-kind="holding"] {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.zone-label[data-kind="terminal"] {
+  color: #9fe6b8;
+}
+
+.zone-label[data-kind="runway"] {
+  color: rgba(196, 196, 255, 0.68);
+}
 
 .gate-label {
   font-family: var(--mono);
@@ -180,8 +196,13 @@ html, body {
    (Garden Terminal, hero) reads mint like the terminal-zone label; Terminal 1
    (Domestic Pier) reads a warmer neutral. Both are overridden by .occupied /
    .inbound below once a flight actually claims the gate. */
-.gate-label.gate-t2 { border-color: rgba(159, 230, 184, 0.22); }
-.gate-label.gate-t1 { border-color: rgba(255, 196, 107, 0.18); }
+.gate-label.gate-t2 {
+  border-color: rgba(159, 230, 184, 0.22);
+}
+
+.gate-label.gate-t1 {
+  border-color: rgba(255, 196, 107, 0.18);
+}
 
 .gate-label.occupied {
   color: #fff;
@@ -235,20 +256,44 @@ html, body {
   border-radius: inherit;
   pointer-events: none;
   background: linear-gradient(180deg,
-    var(--glass-hi) 0%,
-    rgba(255, 255, 255, 0) 38%);
+      var(--glass-hi) 0%,
+      rgba(255, 255, 255, 0) 38%);
 }
 
-.panel { position: relative; }
+.panel {
+  position: relative;
+}
 
 @keyframes panel-in {
-  to { opacity: 1; transform: translateY(0); }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-.tower  { grid-area: tower;  animation-delay: 1.9s; width: 100%; }
-.stats  { grid-area: stats;  animation-delay: 2.1s; width: 100%; }
-.legend { grid-area: legend; animation-delay: 2.3s; width: 100%; }
-.detail { grid-area: detail; animation-delay: 2.3s; width: 100%; }
+.tower {
+  grid-area: tower;
+  animation-delay: 1.9s;
+  width: 100%;
+}
+
+.stats {
+  grid-area: stats;
+  animation-delay: 2.1s;
+  width: 100%;
+}
+
+.legend {
+  grid-area: legend;
+  animation-delay: 2.3s;
+  width: 100%;
+}
+
+.detail {
+  grid-area: detail;
+  animation-delay: 2.3s;
+  width: 100%;
+}
 
 .eyebrow {
   margin: 0;
@@ -296,9 +341,17 @@ html, body {
 }
 
 @keyframes pulse-dot {
-  0%   { box-shadow: 0 0 0 0 rgba(87, 227, 154, 0.5); }
-  70%  { box-shadow: 0 0 0 7px rgba(87, 227, 154, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(87, 227, 154, 0); }
+  0% {
+    box-shadow: 0 0 0 0 rgba(87, 227, 154, 0.5);
+  }
+
+  70% {
+    box-shadow: 0 0 0 7px rgba(87, 227, 154, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(87, 227, 154, 0);
+  }
 }
 
 .select-wrap {
@@ -336,13 +389,20 @@ html, body {
   transition: border-color 0.25s ease, background 0.25s ease;
 }
 
-#airportSelect:hover  { border-color: rgba(255, 255, 255, 0.22); }
+#airportSelect:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
 #airportSelect:focus-visible {
   outline: none;
   border-color: var(--cyan);
   box-shadow: 0 0 0 3px rgba(98, 220, 255, 0.14);
 }
-#airportSelect option { background: #0a1016; color: var(--text); }
+
+#airportSelect option {
+  background: #0a1016;
+  color: var(--text);
+}
 
 /* =============================================================
    STATS PANEL
@@ -362,8 +422,15 @@ html, body {
   padding: 2px 14px;
   border-left: 1px solid var(--stroke-soft);
 }
-.stat:first-child { border-left: 0; padding-left: 4px; }
-.stat:last-child  { padding-right: 4px; }
+
+.stat:first-child {
+  border-left: 0;
+  padding-left: 4px;
+}
+
+.stat:last-child {
+  padding-right: 4px;
+}
 
 .stat-value {
   font-family: var(--mono);
@@ -374,10 +441,21 @@ html, body {
   transition: color 0.4s ease;
 }
 
-.stat[data-kind="arrival"]   .stat-value { color: var(--cyan); }
-.stat[data-kind="departure"] .stat-value { color: var(--amber); }
-.stat[data-kind="parked"]    .stat-value { color: #9fe6b8; }
-.stat[data-kind="active"]    .stat-value { color: var(--text); }
+.stat[data-kind="arrival"] .stat-value {
+  color: var(--cyan);
+}
+
+.stat[data-kind="departure"] .stat-value {
+  color: var(--amber);
+}
+
+.stat[data-kind="parked"] .stat-value {
+  color: #9fe6b8;
+}
+
+.stat[data-kind="active"] .stat-value {
+  color: var(--text);
+}
 
 .stat-label {
   font-size: 8.5px;
@@ -391,7 +469,9 @@ html, body {
    LEGEND PANEL
    ============================================================= */
 
-.legend { width: 100%; }
+.legend {
+  width: 100%;
+}
 
 .route-key,
 .airline-key {
@@ -418,22 +498,36 @@ html, body {
   border-radius: 2px;
   flex: none;
 }
-.route-key .cyan  { background: var(--cyan);  box-shadow: 0 0 10px rgba(98, 220, 255, 0.7); }
-.route-key .amber { background: var(--amber); box-shadow: 0 0 10px rgba(255, 196, 107, 0.6); }
+
+.route-key .cyan {
+  background: var(--cyan);
+  box-shadow: 0 0 10px rgba(98, 220, 255, 0.7);
+}
+
+.route-key .amber {
+  background: var(--amber);
+  box-shadow: 0 0 10px rgba(255, 196, 107, 0.6);
+}
+
 .route-key .white.dashed {
   background: repeating-linear-gradient(90deg,
-    rgba(255,255,255,0.85) 0 4px, transparent 4px 7px);
+      rgba(255, 255, 255, 0.85) 0 4px, transparent 4px 7px);
   box-shadow: none;
 }
 
-.airline-head { margin-top: 16px; }
+.airline-head {
+  margin-top: 16px;
+}
 
 .airline-key li {
   justify-content: space-between;
   gap: 8px;
   transition: opacity 0.4s ease;
 }
-.airline-key li.idle { opacity: 0.32; }
+
+.airline-key li.idle {
+  opacity: 0.32;
+}
 
 .airline-key .ak-left {
   display: flex;
@@ -488,7 +582,11 @@ html, body {
   cursor: pointer;
   transition: color 0.2s ease, border-color 0.2s ease;
 }
-.unpin:hover { color: var(--text); border-color: rgba(255,255,255,0.28); }
+
+.unpin:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.28);
+}
 
 .detail-empty {
   margin: 12px 0 2px;
@@ -497,7 +595,9 @@ html, body {
   color: var(--faint);
 }
 
-.detail-body { margin-top: 12px; }
+.detail-body {
+  margin-top: 12px;
+}
 
 .detail-top {
   display: flex;
@@ -514,7 +614,10 @@ html, body {
   box-shadow: 0 0 12px currentColor;
 }
 
-.detail-id { min-width: 0; flex: 1; }
+.detail-id {
+  min-width: 0;
+  flex: 1;
+}
 
 .flight-no {
   display: block;
@@ -547,12 +650,24 @@ html, body {
   color: var(--muted);
   white-space: nowrap;
 }
+
 .status-chip[data-state="inbound"],
-.status-chip[data-state="final"]   { color: var(--cyan); }
-.status-chip[data-state="holding"] { color: rgba(255,255,255,0.8); }
-.status-chip[data-state="parked"]  { color: #9fe6b8; }
+.status-chip[data-state="final"] {
+  color: var(--cyan);
+}
+
+.status-chip[data-state="holding"] {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.status-chip[data-state="parked"] {
+  color: #9fe6b8;
+}
+
 .status-chip[data-state="boarding"],
-.status-chip[data-state="climb"]   { color: var(--amber); }
+.status-chip[data-state="climb"] {
+  color: var(--amber);
+}
 
 .detail-grid {
   display: grid;
@@ -585,7 +700,8 @@ html, body {
 
 .tooltip {
   position: fixed;
-  top: 0; left: 0;
+  top: 0;
+  left: 0;
   z-index: 20;
   pointer-events: none;
   opacity: 0;
@@ -605,8 +721,14 @@ html, body {
   white-space: nowrap;
   color: var(--text);
 }
-.tooltip.visible { opacity: 1; }
-.tooltip .tt-accent { color: var(--cyan); }
+
+.tooltip.visible {
+  opacity: 1;
+}
+
+.tooltip .tt-accent {
+  color: var(--cyan);
+}
 
 /* =============================================================
    CINEMATIC INTRO
@@ -621,7 +743,10 @@ html, body {
   opacity: 1;
   transition: opacity 1.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.veil.lifted { opacity: 0; }
+
+.veil.lifted {
+  opacity: 0;
+}
 
 /* airport switch: quick breath of darkness */
 .veil.switching {
@@ -647,10 +772,25 @@ html, body {
 }
 
 @keyframes titlecard {
-  0%   { opacity: 0; transform: translateX(-50%) translateY(12px); }
-  15%  { opacity: 1; transform: translateX(-50%) translateY(0); }
-  68%  { opacity: 1; transform: translateX(-50%) translateY(0); }
-  100% { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px);
+  }
+
+  15% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  68% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
+  }
 }
 
 /* The card lands on bright moss. Without a scrim the metaphor line —
@@ -665,9 +805,9 @@ html, body {
   height: 260px;
   transform: translate(-50%, -50%);
   background: radial-gradient(ellipse at center,
-    rgba(0, 0, 0, 0.78) 0%,
-    rgba(0, 0, 0, 0.52) 40%,
-    rgba(0, 0, 0, 0) 72%);
+      rgba(0, 0, 0, 0.78) 0%,
+      rgba(0, 0, 0, 0.52) 40%,
+      rgba(0, 0, 0, 0) 72%);
 }
 
 .tc-kicker {
@@ -702,14 +842,28 @@ html, body {
    ============================================================= */
 
 @media (max-width: 900px) {
-  .legend { width: min(200px, 54vw); }
-  .detail { width: min(260px, 60vw); }
-  .stat   { padding: 2px 10px; }
-  .stat-value { font-size: 19px; }
+  .legend {
+    width: min(200px, 54vw);
+  }
+
+  .detail {
+    width: min(260px, 60vw);
+  }
+
+  .stat {
+    padding: 2px 10px;
+  }
+
+  .stat-value {
+    font-size: 19px;
+  }
 }
 
 @media (max-width: 720px) {
-  :root { --pad: 13px; --radius: 14px; }
+  :root {
+    --pad: 13px;
+    --radius: 14px;
+  }
 
   .hud {
     grid-template-columns: 1fr;
@@ -724,35 +878,74 @@ html, body {
     padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
 
-  .tower  { width: 100%; }
-  .detail { width: 100%; }
+  .tower {
+    width: 100%;
+  }
+
+  .detail {
+    width: 100%;
+  }
 
   /* Airline roster is the first thing to go — the garden must breathe */
-  .legend { display: none; }
+  .legend {
+    display: none;
+  }
 
-  .stats { grid-template-columns: repeat(4, 1fr); }
-  .stat  { padding: 2px 4px; }
-  .stat-value { font-size: 18px; }
-  .stat-label { font-size: 7.5px; letter-spacing: 0.10em; }
+  .stats {
+    grid-template-columns: repeat(4, 1fr);
+  }
 
-  .tower-sub { margin-bottom: 11px; }
+  .stat {
+    padding: 2px 4px;
+  }
 
-  .zone-label .zl-note { display: none; }
-  .zone-label .zl-name { font-size: 8.5px; letter-spacing: 0.16em; }
+  .stat-value {
+    font-size: 18px;
+  }
+
+  .stat-label {
+    font-size: 7.5px;
+    letter-spacing: 0.10em;
+  }
+
+  .tower-sub {
+    margin-bottom: 11px;
+  }
+
+  .zone-label .zl-note {
+    display: none;
+  }
+
+  .zone-label .zl-name {
+    font-size: 8.5px;
+    letter-spacing: 0.16em;
+  }
 
   /* keep the one note that names the gates, since the captions are hidden */
-  .zone-label[data-kind="terminal"] .zl-note { display: block; }
+  .zone-label[data-kind="terminal"] .zl-note {
+    display: block;
+  }
 
   /* Ten gate captions collide at this scale. The rings still pulse, and
      "T2 · C1–C6 · T1 · D1–D4" under Kempegowda Bloom carries the meaning. */
-  .gate-label { display: none; }
+  .gate-label {
+    display: none;
+  }
 
-  .titlecard { bottom: 28vh; }
+  .titlecard {
+    bottom: 28vh;
+  }
 }
 
 @media (max-width: 400px) {
-  .stat-value { font-size: 16px; }
-  .detail-grid { grid-template-columns: 1fr 1fr; gap: 10px 8px; }
+  .stat-value {
+    font-size: 16px;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 8px;
+  }
 }
 
 /*
@@ -767,7 +960,7 @@ html, body {
     --radius-sm: 6px;
   }
 
-  .stage { inset: 0; }
+
 
   .hud {
     display: block;
@@ -784,22 +977,36 @@ html, body {
     border-radius: 9px;
   }
 
-  .tower-head { gap: 5px; }
-  .live-dot { width: 4px; height: 4px; }
+  .tower-head {
+    gap: 5px;
+  }
+
+  .live-dot {
+    width: 4px;
+    height: 4px;
+  }
+
   .tower-title {
     overflow: hidden;
     font-size: 10px;
     line-height: 1.1;
     text-overflow: ellipsis;
   }
-  .tower-sub { display: none; }
 
-  .select-wrap { margin-top: 6px; }
+  .tower-sub {
+    display: none;
+  }
+
+  .select-wrap {
+    margin-top: 6px;
+  }
+
   .select-wrap::after {
     right: 8px;
     width: 4px;
     height: 4px;
   }
+
   #airportSelect {
     height: 25px;
     padding: 3px 22px 3px 8px;
@@ -817,6 +1024,7 @@ html, body {
     border-radius: 9px;
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
+
   .stat,
   .stat:first-child,
   .stat:last-child {
@@ -824,7 +1032,11 @@ html, body {
     gap: 2px;
     padding: 0 2px;
   }
-  .stat-value { font-size: 13px; }
+
+  .stat-value {
+    font-size: 13px;
+  }
+
   .stat-label {
     max-width: 100%;
     overflow: hidden;
@@ -841,19 +1053,137 @@ html, body {
     display: none !important;
   }
 
-  .titlecard { display: none; }
+  .titlecard {
+    display: none;
+  }
 }
 
 /* Landscape phones: keep the stage clear */
 @media (max-height: 460px) and (orientation: landscape) {
-  .legend { display: none; }
-  .titlecard { bottom: 14px; }
-  .tc-kicker { font-size: 18px; }
+  .legend {
+    display: none;
+  }
+
+  .titlecard {
+    bottom: 14px;
+  }
+
+  .tc-kicker {
+    font-size: 18px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .panel     { animation-duration: 0.01ms; opacity: 1; transform: none; }
-  .titlecard { animation-duration: 0.01ms; animation-delay: 0s; opacity: 0; }
-  .live-dot  { animation: none; }
-  .veil      { transition-duration: 0.01ms; }
+  .panel {
+    animation-duration: 0.01ms;
+    opacity: 1;
+    transform: none;
+  }
+
+  .titlecard {
+    animation-duration: 0.01ms;
+    animation-delay: 0s;
+    opacity: 0;
+  }
+
+  .live-dot {
+    animation: none;
+  }
+
+  .veil {
+    transition-duration: 0.01ms;
+  }
+}
+
+/* --- COLLAPSIBLE HUD PANELS & TOGGLE --- */
+.panel {
+  transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.5s ease;
+}
+
+/* Default collapsed state for panels when HUD is not active */
+.hud:not(.hud-active) .panel {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Slide columns out on desktop layout */
+@media (min-width: 721px) {
+  .hud:not(.hud-active) .tower,
+  .hud:not(.hud-active) .legend {
+    transform: translateX(-115%) !important;
+  }
+  .hud:not(.hud-active) .stats,
+  .hud:not(.hud-active) .detail {
+    transform: translateX(115%) !important;
+  }
+}
+
+/* Slide top/bottom out on mobile layout */
+@media (max-width: 720px) {
+  .hud:not(.hud-active) .tower,
+  .hud:not(.hud-active) .stats {
+    transform: translateY(-115%) !important;
+  }
+  .hud:not(.hud-active) .detail {
+    transform: translateY(115%) !important;
+  }
+}
+
+/* Pill-shaped floating HUD toggle button */
+.hud-toggle-btn {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 124px;
+  height: 32px;
+  border-radius: 16px;
+  background: var(--glass);
+  border: 1px solid var(--stroke);
+  box-shadow: var(--shadow);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  color: rgba(255, 255, 255, 0.85);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 0.3s, transform 0.2s, border-color 0.3s, color 0.3s, box-shadow 0.3s;
+  pointer-events: auto;
+  padding: 0;
+}
+
+.hud-toggle-btn::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ff4a4a; /* red when closed */
+  box-shadow: 0 0 6px #ff4a4a;
+  transition: background-color 0.3s, box-shadow 0.3s;
+}
+
+.hud-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateX(-50%) scale(1.05);
+}
+
+/* Open State */
+.hud-active-btn {
+  border-color: #38bdf8;
+  color: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.15);
+}
+
+.hud-active-btn::before {
+  background: #38bdf8; /* glowing cyan when open */
+  box-shadow: 0 0 8px #38bdf8;
 }
