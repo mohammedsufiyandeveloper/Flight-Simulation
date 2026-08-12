@@ -101,6 +101,7 @@ body {
   inset: 0;
   pointer-events: none;
   overflow: hidden;
+  transition: opacity 0.5s ease;
 }
 
 .zone-label,
@@ -879,7 +880,7 @@ body {
   }
 
   .tower {
-    width: 100%;
+    width: calc(100% - 136px);
   }
 
   .detail {
@@ -1116,6 +1117,9 @@ body {
   .hud:not(.hud-active) .detail {
     transform: translateX(115%) !important;
   }
+  .stats {
+    margin-top: calc(32px + var(--hud-gap));
+  }
 }
 
 /* Slide top/bottom out on mobile layout */
@@ -1132,9 +1136,8 @@ body {
 /* Pill-shaped floating HUD toggle button */
 .hud-toggle-btn {
   position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: var(--hud-padding);
+  right: var(--hud-padding);
   width: 124px;
   height: 32px;
   border-radius: 16px;
@@ -1173,7 +1176,7 @@ body {
 .hud-toggle-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.3);
-  transform: translateX(-50%) scale(1.05);
+  transform: scale(1.05);
 }
 
 /* Open State */
@@ -1186,4 +1189,14 @@ body {
 .hud-active-btn::before {
   background: #38bdf8; /* glowing cyan when open */
   box-shadow: 0 0 8px #38bdf8;
+}
+
+/* Hide HUD layers when UI is inactive */
+body:not(.hud-active) .label-layer {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+body:not(.hud-active) .tooltip {
+  display: none !important;
 }

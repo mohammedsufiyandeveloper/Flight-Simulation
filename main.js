@@ -8,22 +8,19 @@
      literally built as "a terminal in a garden" — so it is the hero
      structure here (the mainflower.glb bloom at the centre of the
      scene). T1 is the older, domestic-leaning terminal, represented
-     as a smaller secondary arc of gates on the same bloom.
+     as the smaller second bloom.
 
    Metaphor map
      garden               → Kempegowda International Airport (BLR)
-     the flower bloom     → the terminal campus (mainflower.glb)
-       · C1–C6 petals      → Terminal 2, "Garden Terminal" (hero, international)
-       · D1–D4 petals      → Terminal 1, domestic pier
-     butterflies           → flights
-     cyan corridors        → arrival approach paths
-     amber trails           → departure climb-out paths
-     white arcs             → the holding pattern stack
+     the flower blooms    → the terminal campus (mainflower.glb)
+       · right flower      → Terminal 2, "Garden Terminal" (hero, international)
+       · left flower       → Terminal 1, domestic pier
+     butterflies           → flights — arrivals fly in and land on a flower,
+                              departures are a parked butterfly flying back out
    ================================================================= */
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 /* =================================================================
@@ -50,7 +47,6 @@ const TERMINAL = new THREE.Vector3(1.18, -0.18, 0.30);
 
 /** Terminal 1 and Terminal 2 use matching, separately positioned blooms. */
 const TERMINAL_T1 = new THREE.Vector3(-1.18, -0.18, 0.30);
-const TERMINAL_FLOWER_SCALE = 0.52;
 
 /**
  * The garden video (gardenanimation.mp4) doesn't share the plane's aspect —
@@ -81,31 +77,20 @@ const VIDEO_RENDER_QUALITY = {
 };
 
 const ALT = {
-  // cube.glb's viewer-facing rim tops out at roughly z=1.74 after the garden
-  // fit transform. Keep all operational data just in front of that surface
-  // so routes, gates, labels and butterflies live on the garden instead of
-  // appearing behind the box when OrbitControls turns to a side view.
-  ground: 3.82,         // z of gates and a butterfly resting on a flower
-  cruise: 3.44,         // z of airborne traffic and route corridors
+  ground: 0.30,         // z of gates and a butterfly resting on a flower
+  cruise: 0.75,         // z of airborne traffic and route corridors
   ceiling: 41000        // ft, for the readout only
 };
 
-// The bloom is left-of-centre in the artwork, so the stack has to stay tight
-// enough to leave the Arrival Meadow room for a real approach corridor.
-const HOLD_RADIUS = 1.20;
-
 // Two terminals, one campus — mirrors BLR's real Kempegowda layout. T2 (hero,
-// "Garden Terminal") is the big central bloom and gets the larger share of
-// gates, since it's both the busier real terminal (~25M pax/yr vs T1's ~20M)
-// and the one whose real architecture *is* this project's garden metaphor.
-// T1 and T2 are matching blooms with their own gate groups.
-const T2_GATE_COUNT = 6;   // Terminal 2 · Garden Terminal · petals C1–C6
-const T1_GATE_COUNT = 4;   // Terminal 1 · Domestic Pier   · petals D1–D4
-const GATE_COUNT = T1_GATE_COUNT + T2_GATE_COUNT;
-const GATE_RADIUS = 0.34;
-const GATE_RADIUS_T1 = 0.28;
+// "Garden Terminal") is the big central bloom, the busier real terminal
+// (~25M pax/yr vs T1's ~20M) and the one whose real architecture *is* this
+// project's garden metaphor.
 
 const MAX_DT = 1 / 24;  // clamp so tab-switches never teleport flights
+
+/** Overall butterfly size multiplier — applied on top of the base scale in Butterfly.update(). */
+const BUTTERFLY_SCALE = 1.175;
 
 const COLOR = {
   arrival: new THREE.Color("#62dcff"),
@@ -170,21 +155,17 @@ const AIRPORTS = {
 
 const STATUS_LABEL = {
   inbound: "Arriving",
-  holding: "Holding",
-  final: "Landing",
-  parked: "At Gate",
+  parked: "Landed",
   boarding: "Boarding",
   climb: "Departing",
   gone: "Departed"
 };
 
 const ZONE_LABEL = {
-  inbound: "Arrival Meadow",
-  holding: "Holding Pattern",
-  final: "Final Approach",
+  inbound: "Arriving",
   parked: "Terminal Bloom",
   boarding: "Terminal Bloom",
-  climb: "Departure Trail",
+  climb: "Departing",
   gone: "—"
 };
 
@@ -208,15 +189,6 @@ function angleDelta(a, b) {
   if (d > Math.PI) d -= Math.PI * 2;
   if (d < -Math.PI) d += Math.PI * 2;
   return d;
-}
-
-/** Point on the holding ring at a given angle. */
-function ringPoint(angle, radius = HOLD_RADIUS, z = ALT.cruise) {
-  return new THREE.Vector3(
-    TERMINAL.x + Math.cos(angle) * radius,
-    TERMINAL.y + Math.sin(angle) * radius,
-    z
-  );
 }
 
 /* =================================================================
@@ -390,8 +362,9 @@ const WING_FRAG = /* glsl */`
     // sapphire at the edges, electric cyan toward the body
     vec3 color = mix(CYAN, DEEP, smoothstep(0.15, 0.95, radial));
 
-    // livery tint, strongest out on the wing where it reads against the foliage
-    color = mix(color, uColor, uTint * (0.26 + 0.34 * radial));
+    // livery tint — dominant across the whole wing so each butterfly reads
+    // clearly as its own airline's colour, not just tinted at the edges
+    color = mix(color, uColor, uTint * (0.65 + 0.35 * radial));
 
     // inner glow — the light source lives at the thorax; a warm gold core
     // sits under the electric cyan so the wing reads as lit from within,
@@ -445,6 +418,7 @@ function makeWingMaterial(side, color, seed, tint) {
     fragmentShader: WING_FRAG,
     transparent: true,
     depthWrite: false,
+    depthTest: false,
     side: THREE.DoubleSide,
     uniforms: {
       uTime: { value: Math.random() * 10 },
@@ -498,11 +472,6 @@ const GARDEN_FRAG = /* glsl */`
   uniform vec2  uVideoOffset;
   uniform vec2  uVideoResolution;  // native media px size, for the sharpen kernel's texel step
   uniform float uSharpenAmount;    // 0 off (mobile) .. ~0.3 (desktop) — counters bilinear softening
-
-  uniform vec2  uTerminal;
-  uniform vec2  uGatePos[6];
-  uniform vec3  uGateColor[6];
-  uniform vec2  uGateFx[6];       // x = sustained aura, y = transient flash
 
   varying vec2 vUv;
 
@@ -561,474 +530,6 @@ const GARDEN_FRAG = /* glsl */`
  * Owns the garden plane and the uniforms that make it feel alive. Gate state is
  * pushed in once per frame; nothing here allocates after construction.
  */
-/**
- * Configuration for fine-tuning the 3D GLB garden model.
- */
-const GARDEN_MODEL_CONFIG = {
-  scale: 1.0,           // Extra scale multiplier if needed
-  offsetX: 0.0,         // Fine-tuning position offset
-  offsetY: 0.0,
-  offsetZ: -0.2,
-  rotationX: 0, // Z-up GLTF aligns directly with the project coordinate system
-  rotationY: 0,
-  rotationZ: 0
-};
-
-/**
- * Named tuning knobs for how the grass field is contained inside the
- * cube/frame's inner opening, and how the ground layers stack vertically.
- * All fractions are relative to the cube's own footprint, measured live from
- * cube.glb's bounding box — see the containment math in LivingGardenModel,
- * not hand-picked against a single render.
- */
-const GARDEN_CONTAINMENT = {
-  cubeWallInsetX: -0.015,       // expand the PNG slightly beneath the left/right inner wall edges
-  cubeWallInsetY: -0.015,       // expand the PNG slightly beneath the top/bottom inner wall edges
-  grassFitMargin: 1.0,          // exact inner-opening fit, corner to corner
-  grassZLift: 0.08,             // lift so grass is brought more front / closer to camera and covers the ground
-  grassDensityJitterFrac: 0.035 // how far (as a fraction of the inner opening) each density-filler clone is offset
-};
-
-/** Toggle on during layout tuning to draw the cube's outer/inner bounds. Leave off for delivery. */
-const SHOW_GARDEN_DEBUG_BOUNDS = false;
-
-/**
- * A small procedural turf texture for the continuous grass floor. The GLB
- * contains separated clumps, so no amount of scaling can cover the empty
- * space between its blades; this layer supplies the missing carpet while the
- * original geometry remains above it for real depth and silhouettes.
- */
-function createGrassCarpetTexture() {
-  const size = 128;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-
-  ctx.fillStyle = "#24470e";
-  ctx.fillRect(0, 0, size, size);
-
-  // Seeded noise keeps the texture stable across refreshes.
-  let seed = 0x6d2b79f5;
-  const random = () => {
-    seed = Math.imul(seed ^ (seed >>> 15), seed | 1);
-    seed ^= seed + Math.imul(seed ^ (seed >>> 7), seed | 61);
-    return ((seed ^ (seed >>> 14)) >>> 0) / 4294967296;
-  };
-
-  for (let i = 0; i < 3600; i++) {
-    const x = random() * size;
-    const y = random() * size;
-    const light = 18 + Math.floor(random() * 20);
-    const alpha = 0.18 + random() * 0.34;
-    ctx.fillStyle = `hsla(${92 + random() * 20}, 58%, ${light}%, ${alpha})`;
-    ctx.fillRect(x, y, 0.7 + random() * 1.4, 1.4 + random() * 3.2);
-  }
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(7, 4);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-  return texture;
-}
-
-/**
- * Handles loading, centering, scaling, and animating the 3D GLB garden model environment composed of multiple GLBs.
- */
-class LivingGardenModel {
-  constructor(loadedModels, grassTexture = null) {
-    this.loadedModels = loadedModels;
-    this.model = new THREE.Group();
-
-    // --- Phase 1: measure the cube/frame's own bounds in the shared,
-    // as-authored local coordinate frame every GLB was exported into. This
-    // is the authoritative container — grass is fit inside it, not the
-    // other way around.
-    const cubeEntry = loadedModels.find((m) => m.name === "cube");
-    const groundEntry = loadedModels.find((m) => m.name === "ground");
-    const cubeLocalBox = cubeEntry ? new THREE.Box3().setFromObject(cubeEntry.gltf.scene) : null;
-    const groundLocalBox = groundEntry ? new THREE.Box3().setFromObject(groundEntry.gltf.scene) : null;
-    const groundSurfaceZ = groundLocalBox?.max.z;
-    let innerBounds = null;
-    if (cubeLocalBox) {
-      const cubeSize = cubeLocalBox.getSize(new THREE.Vector3());
-      const cubeCenter = cubeLocalBox.getCenter(new THREE.Vector3());
-      const halfX = (cubeSize.x / 2) * (1 - GARDEN_CONTAINMENT.cubeWallInsetX);
-      const halfY = (cubeSize.y / 2) * (1 - GARDEN_CONTAINMENT.cubeWallInsetY);
-      innerBounds = {
-        center: cubeCenter,
-        minX: cubeCenter.x - halfX, maxX: cubeCenter.x + halfX,
-        minY: cubeCenter.y - halfY, maxY: cubeCenter.y + halfY
-      };
-      console.debug("[Flight Garden] cube bounds", cubeLocalBox.min, cubeLocalBox.max,
-        "→ inner opening", innerBounds);
-    } else {
-      console.warn("[Flight Garden] cube.glb missing — grass containment skipped.");
-    }
-
-    this._grassMeshes = [];
-    this._grassCarpetTexture = grassTexture;
-    if (this._grassCarpetTexture) {
-      this._grassCarpetTexture.colorSpace = THREE.SRGBColorSpace;
-      this._grassCarpetTexture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-    }
-
-    loadedModels.forEach(({ name, gltf }) => {
-      const sceneModel = gltf.scene;
-
-      // Enable shadows for meshes inside the model and make materials double-sided
-      sceneModel.traverse((child) => {
-        if (child.isMesh) {
-          child.castShadow = true;
-          child.receiveShadow = true;
-          if (child.material) {
-            const materials = Array.isArray(child.material) ? child.material : [child.material];
-            materials.forEach((mat) => {
-              mat.side = THREE.DoubleSide;
-              // The user-facing floor is all turf: re-skin the source ground
-              // as grass as well as placing the carpet above it. This ensures
-              // no brown soil can show through around sparse GLB clumps.
-            });
-          }
-        }
-      });
-
-      if (name === "grass" && innerBounds) {
-        // Phase 3: contain grass inside the cube's inner opening. The mesh's
-        // own geometry sits far from its local (0,0,0) origin (it shares the
-        // scene's authored world coordinates), so scaling naively around
-        // that origin would fling it out of frame — scale around its own
-        // bounding-box centre instead. Fit X and Y independently because the
-        // cube's opening is much wider than the authored grass patch; a
-        // uniform "contain" scale leaves bare ground down both sides. The
-        // clipping planes below still provide a hard wall boundary.
-        const grassBox = new THREE.Box3().setFromObject(sceneModel);
-        const grassCenter = grassBox.getCenter(new THREE.Vector3());
-        const grassSize = grassBox.getSize(new THREE.Vector3());
-
-        const innerWidth = innerBounds.maxX - innerBounds.minX;
-        const innerHeight = innerBounds.maxY - innerBounds.minY;
-        const fitScaleX = (innerWidth / grassSize.x) * GARDEN_CONTAINMENT.grassFitMargin;
-        const fitScaleY = (innerHeight / grassSize.y) * GARDEN_CONTAINMENT.grassFitMargin;
-        const fitScaleZ = Math.min(fitScaleX, fitScaleY);
-
-        // The authored grass asset is a collection of separate clumps whose
-        // bounding box includes large empty regions. Cover the entire inner
-        // opening with turf first, then layer those clumps over it.
-        const carpetGeometry = new THREE.PlaneGeometry(
-          innerWidth * GARDEN_CONTAINMENT.grassFitMargin,
-          innerHeight * GARDEN_CONTAINMENT.grassFitMargin
-        );
-        const carpetMaterial = new THREE.MeshStandardMaterial({
-          map: this._grassCarpetTexture,
-          color: 0x5f8c2a,
-          roughness: 0.96,
-          metalness: 0,
-          side: THREE.DoubleSide
-        });
-        const grassCarpet = new THREE.Mesh(carpetGeometry, carpetMaterial);
-        // GROUND2.glb's visible soil surface sits above the grass asset's
-        // lowest vertex. Anchor the carpet to the measured top of the ground
-        // mesh so it cannot be hidden underneath the soil.
-        const carpetZ = Number.isFinite(groundSurfaceZ)
-          ? groundSurfaceZ + 0.012
-          : grassBox.min.z + GARDEN_CONTAINMENT.grassZLift;
-        grassCarpet.position.set(
-          innerBounds.center.x,
-          innerBounds.center.y,
-          carpetZ
-        );
-        grassCarpet.receiveShadow = true;
-        grassCarpet.renderOrder = -1;
-        this.model.add(grassCarpet);
-        this._grassMeshes.push(grassCarpet);
-
-        const placeGrass = (obj, dx, dy) => {
-          obj.scale.set(fitScaleX, fitScaleY, fitScaleZ);
-          obj.position.set(
-            innerBounds.center.x - grassCenter.x * fitScaleX + dx,
-            innerBounds.center.y - grassCenter.y * fitScaleY + dy,
-            grassCenter.z * (1 - fitScaleZ) + GARDEN_CONTAINMENT.grassZLift
-          );
-        };
-
-        placeGrass(sceneModel, 0, 0);
-        this.model.add(sceneModel);
-        sceneModel.traverse((c) => { if (c.isMesh) this._grassMeshes.push(c); });
-
-        // A couple of tightly-clustered density-filler clones (cheap — they
-        // share geometry/material by reference) to interleave extra tufts
-        // into the gaps between the sparse originals. Offsets are kept small
-        // relative to the fit margin so they stay inside innerBounds; the
-        // clipping planes added after the group is placed (Phase 4) are the
-        // hard guarantee regardless.
-        const jitterX = innerWidth * GARDEN_CONTAINMENT.grassDensityJitterFrac;
-        const jitterY = innerHeight * GARDEN_CONTAINMENT.grassDensityJitterFrac;
-        [[jitterX, jitterY * 0.6], [-jitterX * 0.8, -jitterY]].forEach(([dx, dy]) => {
-          const clone = sceneModel.clone(true);
-          placeGrass(clone, dx, dy);
-          this.model.add(clone);
-          clone.traverse((c) => { if (c.isMesh) this._grassMeshes.push(c); });
-        });
-        return;
-      }
-
-      this.model.add(sceneModel);
-    });
-
-    // Project the supplied transparent grass PNG over the ground GLB. The
-    // cube's measured opening is the single source of truth for placement,
-    // so the layer remains centred and contained if either GLB is replaced.
-    if (this._grassCarpetTexture && innerBounds) {
-      const innerWidth = innerBounds.maxX - innerBounds.minX;
-      const innerHeight = innerBounds.maxY - innerBounds.minY;
-      const grassLayer = new THREE.Mesh(
-        new THREE.PlaneGeometry(innerWidth, innerHeight),
-        new THREE.MeshStandardMaterial({
-          map: this._grassCarpetTexture,
-          transparent: true,
-          alphaTest: 0.03,
-          roughness: 0.92,
-          metalness: 0,
-          side: THREE.DoubleSide
-        })
-      );
-      grassLayer.name = "grass-png-floor";
-      grassLayer.position.set(
-        innerBounds.center.x,
-        innerBounds.center.y,
-        (Number.isFinite(groundSurfaceZ) ? groundSurfaceZ : 0) + GARDEN_CONTAINMENT.grassZLift
-      );
-      grassLayer.receiveShadow = true;
-      grassLayer.renderOrder = 1;
-      this.model.add(grassLayer);
-      this._grassMeshes.push(grassLayer);
-    }
-
-    scene.add(this.model);
-
-    // Apply base rotation (so Y-up GLTF standard aligns with Z-up project coordinate system)
-    this.model.rotation.set(
-      GARDEN_MODEL_CONFIG.rotationX,
-      GARDEN_MODEL_CONFIG.rotationY,
-      GARDEN_MODEL_CONFIG.rotationZ
-    );
-
-    // Force update matrix so we can calculate accurate bounding box dimensions
-    this.model.updateMatrixWorld(true);
-
-    // Compute original unscaled dimensions after rotation
-    const originalBox = new THREE.Box3().setFromObject(this.model);
-    const originalSize = new THREE.Vector3();
-    originalBox.getSize(originalSize);
-
-    // Calculate scaling factor to fit garden bounds
-    const scaleX = GARDEN.width / originalSize.x;
-    const scaleY = GARDEN.height / originalSize.y;
-    const fitScale = Math.min(scaleX, scaleY) * GARDEN_MODEL_CONFIG.scale;
-    this.model.scale.set(fitScale, fitScale, fitScale);
-
-    // Force update matrix to apply the scale
-    this.model.updateMatrixWorld(true);
-
-    // Now compute the final scaled bounding box
-    const finalBox = new THREE.Box3().setFromObject(this.model);
-    const finalSize = new THREE.Vector3();
-    finalBox.getSize(finalSize);
-    const finalCenter = new THREE.Vector3();
-    finalBox.getCenter(finalCenter);
-
-    // Position: Center the model horizontally (X, Y)
-    this.model.position.x = -finalCenter.x + GARDEN_MODEL_CONFIG.offsetX;
-    this.model.position.y = -finalCenter.y + GARDEN_MODEL_CONFIG.offsetY;
-    // Set Z so that the bottom of the dome is at offsetZ
-    this.model.position.z = -finalBox.min.z + GARDEN_MODEL_CONFIG.offsetZ;
-
-    this.model.updateMatrixWorld(true);
-
-    // --- Phase 4: hard containment safety net. Regardless of the fit-scale
-    // math above, clip grass geometry against the cube's own *final*
-    // world-space inner opening so it can never render past the walls.
-    if (cubeEntry) {
-      const cubeWorldBox = new THREE.Box3().setFromObject(cubeEntry.gltf.scene);
-      const cubeWorldSize = cubeWorldBox.getSize(new THREE.Vector3());
-      this.cubeSize = cubeWorldSize; // Expose final world-space cube size for camera framing
-      const cubeWorldCenter = cubeWorldBox.getCenter(new THREE.Vector3());
-      const innerHalfX = (cubeWorldSize.x / 2) * (1 - GARDEN_CONTAINMENT.cubeWallInsetX);
-      const innerHalfY = (cubeWorldSize.y / 2) * (1 - GARDEN_CONTAINMENT.cubeWallInsetY);
-      const innerMinX = cubeWorldCenter.x - innerHalfX;
-      const innerMaxX = cubeWorldCenter.x + innerHalfX;
-      const innerMinY = cubeWorldCenter.y - innerHalfY;
-      const innerMaxY = cubeWorldCenter.y + innerHalfY;
-
-      const clipPlanes = [
-        new THREE.Plane(new THREE.Vector3(1, 0, 0), -innerMinX),
-        new THREE.Plane(new THREE.Vector3(-1, 0, 0), innerMaxX),
-        new THREE.Plane(new THREE.Vector3(0, 1, 0), -innerMinY),
-        new THREE.Plane(new THREE.Vector3(0, -1, 0), innerMaxY)
-      ];
-
-      renderer.localClippingEnabled = true;
-      this._grassMeshes.forEach((mesh) => {
-        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        mats.forEach((mat) => {
-          mat.clippingPlanes = clipPlanes;
-          mat.clipShadows = true;
-        });
-      });
-      this._grassClipPlanes = clipPlanes;
-
-      if (SHOW_GARDEN_DEBUG_BOUNDS) {
-        scene.add(new THREE.Box3Helper(cubeWorldBox, new THREE.Color(0xff0055)));
-        const innerBoxHelper = new THREE.Box3(
-          new THREE.Vector3(innerMinX, innerMinY, cubeWorldBox.min.z),
-          new THREE.Vector3(innerMaxX, innerMaxY, cubeWorldBox.max.z)
-        );
-        scene.add(new THREE.Box3Helper(innerBoxHelper, new THREE.Color(0x00ff88)));
-      }
-    }
-
-    // Exposed so a second, smaller instance of the hero flower can be grounded
-    // and scaled consistently for the paired terminal blooms.
-    this.fitScale = fitScale;
-    this.flowerGltf = loadedModels.find((m) => m.name === "flower")?.gltf ?? null;
-
-    // Stub properties to satisfy references to livingGarden.material in other functions (e.g. resize)
-    this.material = {
-      uniforms: {
-        uSharpenAmount: { value: 0 }
-      }
-    };
-  }
-
-
-  update(elapsed, master, activity) {
-    // Handle animations embedded within each GLTF model
-    this.loadedModels.forEach(({ gltf }) => {
-      if (gltf.animations && gltf.animations.length > 0) {
-        if (!gltf.mixer) {
-          gltf.mixer = new THREE.AnimationMixer(gltf.scene);
-          gltf.animations.forEach((clip) => {
-            gltf.mixer.clipAction(clip).play();
-          });
-        }
-      }
-
-      if (gltf.mixer) {
-        const last = gltf.lastElapsed || 0;
-        const dt = elapsed - last;
-        gltf.lastElapsed = elapsed;
-        if (dt > 0 && dt < 1) {
-          gltf.mixer.update(dt);
-        }
-      }
-    });
-  }
-
-  dispose() {
-    scene.remove(this.model);
-    this.loadedModels.forEach(({ gltf }) => {
-      gltf.scene.traverse((child) => {
-        if (child.isMesh) {
-          child.geometry.dispose();
-          if (child.material) {
-            const materials = Array.isArray(child.material) ? child.material : [child.material];
-            materials.forEach((m) => m.dispose?.());
-          }
-        }
-      });
-      if (gltf.mixer) {
-        gltf.mixer.stopAllActions?.() || gltf.mixer.uncacheRoot?.(gltf.scene);
-      }
-    });
-  }
-}
-
-/**
- * Scales, centers and grounds `object` at world-space (x, y), matching the
- * technique LivingGardenModel uses for the main garden group: measure its own
- * bounding box *after* scaling, then offset so that box is centred on (x, y)
- * and its lowest point sits on the shared ground level (GARDEN_MODEL_CONFIG's
- * offsetZ — see the derivation in LivingGardenModel's constructor, where the
- * whole garden group's world-space minimum Z reduces to exactly offsetZ).
- * Reused here so a cloned model can be grounded correctly without guessing a
- * z-position by eye.
- */
-function placeGroundedClone(object, x, y, scale) {
-  object.scale.setScalar(scale);
-  object.position.set(0, 0, 0);
-  object.updateMatrixWorld(true);
-
-  const box = new THREE.Box3().setFromObject(object);
-  const center = box.getCenter(new THREE.Vector3());
-
-  object.position.x = x - center.x;
-  object.position.y = y - center.y;
-  object.position.z = GARDEN_MODEL_CONFIG.offsetZ - box.min.z;
-}
-
-/**
- * Replace the single authored centre flower with two equally prominent,
- * deliberately spaced blooms for Bengaluru Airport's Terminal 1 and
- * Terminal 2. Add small plant clusters in the lower corners to close the
- * remaining visual gaps without crowding the terminal gates.
- */
-function arrangeTerminalGarden(gardenModel) {
-  if (!gardenModel.flowerGltf) {
-    console.warn("[Flight Garden] mainflower.glb not loaded — skipping terminal blooms.");
-    return;
-  }
-
-  const sourceFlower = gardenModel.flowerGltf.scene;
-  const secondFlower = sourceFlower.clone(true);
-  gardenModel.model.add(secondFlower);
-  gardenModel.model.updateMatrixWorld(true);
-
-  // Keep both flowers inside LivingGardenModel. They then inherit exactly the
-  // same scale, elevation and grounding as the originally visible flower.
-  // Move them in world units converted through the garden group's scale.
-  const arrangeFlower = (flower, target, rotation, scaleFactor) => {
-    flower.rotation.z += rotation;
-    flower.scale.multiplyScalar(scaleFactor);
-    gardenModel.model.updateMatrixWorld(true);
-    const center = new THREE.Box3()
-      .setFromObject(flower)
-      .getCenter(new THREE.Vector3());
-    flower.position.x += (target.x - center.x) / gardenModel.model.scale.x;
-    flower.position.y += (target.y - center.y) / gardenModel.model.scale.y;
-    flower.position.z += 0.16 / gardenModel.model.scale.z;
-    flower.updateMatrixWorld(true);
-  };
-
-  // Increase sizes: T2 is 0.88, T1 is 0.76 (making T1 a little bigger)
-  arrangeFlower(sourceFlower, TERMINAL_T1, -0.12, 0.76);
-  arrangeFlower(secondFlower, TERMINAL, 0.12, 0.88);
-
-  const plantsGltf = gardenModel.loadedModels.find(({ name }) => name === "plants")?.gltf;
-  if (!plantsGltf) return;
-
-  [
-    { x: -1.78, y: -1.48, rotation: -0.22 },
-    { x: 1.78, y: -1.48, rotation: 0.22 }
-  ].forEach(({ x, y, rotation }) => {
-    const cluster = plantsGltf.scene.clone(true);
-    gardenModel.model.add(cluster);
-    cluster.rotation.z += rotation;
-    cluster.scale.multiplyScalar(0.32);
-    gardenModel.model.updateMatrixWorld(true);
-
-    const center = new THREE.Box3()
-      .setFromObject(cluster)
-      .getCenter(new THREE.Vector3());
-    cluster.position.x += (x - center.x) / gardenModel.model.scale.x;
-    cluster.position.y += (y - center.y) / gardenModel.model.scale.y;
-    cluster.position.z += 0.14 / gardenModel.model.scale.z;
-    cluster.updateMatrixWorld(true);
-  });
-}
-
 class LivingGarden {
   /**
    * mediaAspect defaults to the plane's own aspect (an identity fit) — the
@@ -1055,11 +556,7 @@ class LivingGarden {
         uVideoResolution: { value: new THREE.Vector2(mediaResolution[0], mediaResolution[1]) },
         uSharpenAmount: {
           value: window.innerWidth < 720 ? GARDEN_VIDEO.sharpenMobile : GARDEN_VIDEO.sharpenDesktop
-        },
-        uTerminal: { value: new THREE.Vector2(TERMINAL.x, TERMINAL.y) },
-        uGatePos: { value: gates.map((g) => new THREE.Vector2(g.position.x, g.position.y)) },
-        uGateColor: { value: gates.map(() => new THREE.Color(0, 0, 0)) },
-        uGateFx: { value: gates.map(() => new THREE.Vector2(0, 0)) }
+        }
       }
     });
 
@@ -1086,12 +583,6 @@ class LivingGarden {
     u.uMaster.value = master;
     u.uBreath.value = LivingGarden.breath(elapsed);
     u.uActivity.value = activity;
-
-    for (let i = 0; i < gates.length; i++) {
-      const gate = gates[i];
-      u.uGateColor.value[i].copy(gate.auraColor);
-      u.uGateFx.value[i].set(gate.aura, gate.flash);
-    }
   }
 
   dispose() {
@@ -1191,6 +682,37 @@ async function loadGardenVideoTexture(url) {
     window.addEventListener("touchstart", resume, { once: true });
   }
 
+  // Belt-and-suspenders for an uninterrupted loop: video.loop already
+  // replays at the end, but some browsers pause background/off-DOM video
+  // (this element is never inserted into the page, only sampled as a
+  // texture) under memory or battery pressure. Resume immediately whenever
+  // that happens instead of leaving the garden frozen on one frame.
+  video.addEventListener("pause", () => {
+    video.play().catch(() => { });
+  });
+
+  // video.loop's end-of-media restart visibly hitches in several browsers
+  // (a decoder flush/keyframe seek treated as a special case right at the
+  // last frame). Loop proactively instead: seek back to 0 a hair before the
+  // real end, while still mid-playback, so the same cheap seek-to-keyframe-0
+  // happens without the end-of-media overhead. video.loop stays on as a
+  // fallback in case this never quite reaches the threshold on a given frame.
+  const LOOP_LEAD = 0.08; // seconds of lead time before the true end
+  const loopBack = () => {
+    if (video.duration && video.currentTime >= video.duration - LOOP_LEAD) {
+      video.currentTime = 0;
+    }
+  };
+  if (typeof video.requestVideoFrameCallback === "function") {
+    const onFrame = () => {
+      loopBack();
+      video.requestVideoFrameCallback(onFrame);
+    };
+    video.requestVideoFrameCallback(onFrame);
+  } else {
+    video.addEventListener("timeupdate", loopBack);
+  }
+
   const texture = new THREE.VideoTexture(video);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.minFilter = THREE.LinearFilter;
@@ -1213,500 +735,393 @@ async function loadGardenVideoTexture(url) {
   return { texture, video, mediaAspect, mediaResolution };
 }
 
-const dracoLoader = new DRACOLoader();
-dracoLoader.setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/libs/draco/");
+/**
+ * Ties the garden video's playback speed to Bengaluru's live wind. wind_kph
+ * is mapped to a 0..1 "speed" value across [minKph, maxKph], then that 0..1
+ * is mapped onto the video's playbackRate range (minRate/maxRate — currently
+ * 1..2, so calm wind still plays at normal 1x and gusty wind plays at 2x,
+ * rather than ever slowing down or pausing).
+ *
+ * The actual WeatherAPI.com call happens server-side (see /api/wind in
+ * server.js), which reads the key from .env — it never ships to the
+ * browser, unlike calling the weather API directly from this file.
+ */
+const WIND_API = {
+  minKph: 18,
+  maxKph: 38,
+  minRate: 1,
+  maxRate: 2,
+  pollMs: 5 * 60 * 1000 // real-time-enough without hammering the free-tier rate limit
+};
+
+let gardenVideoEl = null;
+
+/** Bengaluru's current wind speed in km/h, via this server's /api/wind proxy. */
+async function fetchWindKph() {
+  const res = await fetch("/api/wind");
+  if (!res.ok) throw new Error(`/api/wind → HTTP ${res.status}`);
+  const data = await res.json();
+  if (typeof data.kph !== "number") throw new Error(data.error || "/api/wind returned no kph");
+  return data.kph;
+}
+
+/** Maps a km/h wind reading onto the 0..1 range requested for the video-speed control. */
+function windToSpeed01(kph) {
+  return clamp((kph - WIND_API.minKph) / (WIND_API.maxKph - WIND_API.minKph), 0, 1);
+}
+
+async function updateVideoSpeedFromWind() {
+  if (!gardenVideoEl) return;
+  try {
+    const kph = await fetchWindKph();
+    const speed01 = windToSpeed01(kph);
+    gardenVideoEl.playbackRate = lerp(WIND_API.minRate, WIND_API.maxRate, speed01);
+    console.debug(
+      `[Flight Garden] wind ${kph.toFixed(1)} km/h → speed ${speed01.toFixed(2)} → playbackRate ${gardenVideoEl.playbackRate.toFixed(2)}`
+    );
+  } catch (err) {
+    console.warn("[Flight Garden] live wind lookup failed — video speed unchanged.", err);
+  }
+}
+
+function startWindDrivenVideoSpeed() {
+  updateVideoSpeedFromWind();
+  setInterval(updateVideoSpeedFromWind, WIND_API.pollMs);
+}
 
 /**
- * Loads assets/fairytale_garden.glb as a 3D model environment.
+ * Loads a .glb as a THREE.Group via GLTFLoader. mainflower.glb ships
+ * uncompressed (no KHR_draco_mesh_compression), so no DRACOLoader is needed.
  */
-async function loadGardenModel(url) {
-  const loader = new GLTFLoader();
-  loader.setDRACOLoader(dracoLoader);
+const gltfLoader = new GLTFLoader();
+async function loadGlb(url) {
   return new Promise((resolve, reject) => {
-    loader.load(
-      url,
-      (gltf) => resolve(gltf),
-      undefined,
-      (err) => reject(err)
-    );
+    gltfLoader.load(url, (gltf) => resolve(gltf), undefined, (err) => reject(err));
   });
 }
 
-const modelConfigs = [
-  { name: 'ground', url: 'assets/GROUND2.glb' },         // base terrain / apron (optimized replacement for groundplane.glb)
-  { name: 'pebbles', url: 'assets/pebbles.glb' },        // taxiway + path detailing
-  { name: 'plants', url: '' },         // landscaping around both terminals
-  { name: 'flower', url: 'assets/mainflower.glb' },      // the terminal campus (T1 + T2 petals)
-  { name: 'cube', url: 'assets/cube.glb' }               // placeholder/test cube frame
-];
+/**
+ * Target bloom diameter (world units, XY) for each terminal flower, chosen so
+ * the petal landing spots' maxR (0.38 T1 / 0.46 T2 — see PETAL_LANDING_SPOTS,
+ * the radius flights actually land within) sits inside the petals with
+ * margin rather than overflowing them. mainflower.glb's own authored scale
+ * is normalized out below, so these are the only numbers that matter for
+ * sizing.
+ */
+const TERMINAL_FLOWER_DIAMETER = { T1: 1.05, T2: 1.30 };
 
-const grassTexturePromise = new Promise((resolve, reject) => {
-  new THREE.TextureLoader().load('assets/grass.png', resolve, undefined, reject);
-});
+/** Extra z-lift so the blooms sit forward of the ground/video plane, toward the camera. */
+const TERMINAL_FLOWER_Z_LIFT = 0.35;
 
-Promise.all([
-  Promise.all(modelConfigs.map((cfg) =>
-    loadGardenModel(cfg.url)
-      .then((gltf) => ({ name: cfg.name, gltf }))
-      .catch((err) => {
-        console.warn(`[Flight Garden] Failed to load 3D model component "${cfg.name}" from ${cfg.url}:`, err);
-        return null;
-      })
-  )),
-  grassTexturePromise
-])
-  .then(([results, grassTexture]) => {
-    const loadedModels = results.filter((r) => r !== null);
-    if (loadedModels.length === 0) {
-      throw new Error("No 3D model components could be loaded.");
+/** Cheap dependency-free hash, seeding the value-noise lattice below. */
+function hash2(x, y) {
+  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+  return s - Math.floor(s);
+}
+
+/**
+ * Smoothed (Perlin-style) value noise, returned in -1..1. Used instead of a
+ * plain sine so the petal float reads as organic drift rather than a
+ * metronome — every vertex samples a slightly different point on the
+ * lattice (via its own position + seed), so neighbouring petals never move
+ * in lockstep the way a shared sin(t) would.
+ */
+function valueNoise2(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi), b = hash2(xi + 1, yi);
+  const c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+  return (lerp(lerp(a, b, u), lerp(c, d, u), v)) * 2 - 1;
+}
+
+/**
+ * Current "reaction" intensity per terminal, 0 (calm) up to ~2.4 (just hit).
+ * Spikes when a flight touches down or lifts off at that terminal (see
+ * triggerFlowerReaction, called from Butterfly's enterParked/enterClimb) and
+ * decays back to zero, so the bloom visibly shivers at the moment it's
+ * landed on or left, layered on top of its constant ambient drift.
+ */
+const terminalReaction = { T1: 0, T2: 0 };
+const REACTION_DECAY = 1.1; // per second
+
+function triggerFlowerReaction(terminal, strength = 1) {
+  terminalReaction[terminal] = Math.min(2.4, (terminalReaction[terminal] ?? 0) + strength);
+}
+
+/**
+ * Per-mesh state for the petal float, keyed by { posAttr, basePositions,
+ * radius, centerX/Y, seed, terminal } — updated once per frame in animate().
+ * CPU-side vertex displacement (rather than an onBeforeCompile shader hook)
+ * so it works regardless of whether meshes/materials end up shared between
+ * the T1/T2 clones, and so it's trivially visible/debuggable without
+ * depending on WebGL program-cache behaviour.
+ */
+const floatingPetalMeshes = [];
+
+/**
+ * Registers `mesh` for the gentle per-frame bob: vertices far from the
+ * mesh's own bounding-sphere centre (petal tips) drift up and down more than
+ * vertices near it (the flower's core) — a cheap stand-in for real
+ * cloth/soft-body physics. `basePositions` is a frozen copy of the original
+ * buffer so displacement is always computed fresh from the rest pose, never
+ * accumulated frame over frame. `terminal` ("T1"/"T2") ties the mesh to
+ * terminalReaction so it shivers when its own flights land or depart.
+ */
+function registerPetalFloat(mesh, seed, terminal) {
+  const geometry = mesh.geometry;
+  geometry.computeBoundingSphere();
+  const sphere = geometry.boundingSphere;
+  const radius = Math.max(sphere?.radius ?? 1, 0.001);
+  const centerX = sphere?.center.x ?? 0;
+  const centerY = sphere?.center.y ?? 0;
+
+  const posAttr = geometry.attributes.position;
+  floatingPetalMeshes.push({
+    posAttr,
+    basePositions: Float32Array.from(posAttr.array),
+    radius,
+    centerX,
+    centerY,
+    seed,
+    terminal
+  });
+}
+
+/** Advances every registered petal float and decays terminalReaction — called once per frame from animate(). */
+function updateTerminalFlowers(dt, elapsed) {
+  terminalReaction.T1 = Math.max(0, terminalReaction.T1 - dt * REACTION_DECAY);
+  terminalReaction.T2 = Math.max(0, terminalReaction.T2 - dt * REACTION_DECAY);
+
+  for (const f of floatingPetalMeshes) {
+    const { posAttr, basePositions, radius, centerX, centerY, seed, terminal } = f;
+    const reaction = terminalReaction[terminal] ?? 0;
+    const arr = posAttr.array;
+    for (let i = 0; i < arr.length; i += 3) {
+      const bx = basePositions[i];
+      const by = basePositions[i + 1];
+      const dx = bx - centerX;
+      const dy = by - centerY;
+      const reach = clamp(Math.sqrt(dx * dx + dy * dy) / radius, 0, 1) ** 2;
+
+      const ambient = valueNoise2(bx * 1.4 + by * 0.9 + seed, elapsed * 0.35 + seed * 4.1);
+      const shiver = valueNoise2(bx * 3.1 - by * 2.4 + seed * 7.3, elapsed * 2.6 + seed * 1.7);
+      const wobble = ambient + shiver * reaction * 0.9;
+
+      arr[i + 2] = basePositions[i + 2] + wobble * radius * 0.05 * reach;
     }
-    livingGarden = new LivingGardenModel(loadedModels, grassTexture);
-    arrangeTerminalGarden(livingGarden);
-    initHUDToggle();
+    posAttr.needsUpdate = true;
+  }
+}
+
+/**
+ * Scales `object` so its own XY bounding-box diagonal matches `diameter`,
+ * then centers and grounds it at world-space (x, y, z) — mirrors the
+ * measure-after-scale technique used elsewhere in this file so a model can
+ * be placed correctly without hand-tuning its raw authored units.
+ */
+function placeGroundedFlower(object, x, y, z, diameter) {
+  object.position.set(0, 0, 0);
+  object.scale.setScalar(1);
+  object.updateMatrixWorld(true);
+
+  const rawBox = new THREE.Box3().setFromObject(object);
+  const rawSize = rawBox.getSize(new THREE.Vector3());
+  const scale = diameter / Math.max(rawSize.x, rawSize.y);
+  object.scale.setScalar(scale);
+  object.updateMatrixWorld(true);
+
+  const box = new THREE.Box3().setFromObject(object);
+  const center = box.getCenter(new THREE.Vector3());
+  object.position.x = x - center.x;
+  object.position.y = y - center.y;
+  object.position.z = z - box.min.z;
+  object.updateMatrixWorld(true);
+}
+
+/** Terminal 1 + Terminal 2 blooms — see the metaphor map at the top of this file. */
+function loadTerminalFlowers() {
+  loadGlb("")
+    .then((gltf) => {
+      const t1 = gltf.scene;
+      const t2 = gltf.scene.clone(true);
+
+      // t2's meshes share t1's geometry buffers by default (clone(true) copies
+      // the reference, not the data) — clone them too so each flower's petal
+      // float can mutate its own vertex positions independently.
+      t2.traverse((child) => {
+        if (child.isMesh) child.geometry = child.geometry.clone();
+      });
+
+      [[t1, "T1"], [t2, "T2"]].forEach(([flower, terminal]) => {
+        flower.traverse((child) => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            registerPetalFloat(child, Math.random() * 100, terminal);
+          }
+        });
+      });
+
+      placeGroundedFlower(t1, TERMINAL_T1.x, TERMINAL_T1.y, TERMINAL_T1.z + TERMINAL_FLOWER_Z_LIFT, TERMINAL_FLOWER_DIAMETER.T1);
+      placeGroundedFlower(t2, TERMINAL.x, TERMINAL.y, TERMINAL.z + TERMINAL_FLOWER_Z_LIFT, TERMINAL_FLOWER_DIAMETER.T2);
+
+      scene.add(t1, t2);
+    })
+    .catch((err) => {
+      console.warn("[Flight Garden] mainflower.glb unavailable — terminal blooms stay empty.", err);
+    });
+}
+
+loadGardenVideoTexture("assets/playbalst6546456.mp4")
+  .then(({ texture, video, mediaAspect, mediaResolution }) => {
+    livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
+    gardenVideoEl = video;
+    startWindDrivenVideoSpeed();
     resize();
   })
   .catch(async (err) => {
-    console.warn("[Flight Garden] Garden 3D models unavailable, falling back to gardenvideo.mp4.", err);
+    console.warn("[Flight Garden] playbalst31123.mp4 unavailable, falling back to garden.png.", err);
     try {
-      const { texture, mediaAspect, mediaResolution } = await loadGardenVideoTexture("assets/gardenvideo.mp4");
-      livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
+      const texture = await loadGardenTexture("assets/garden.png");
+      livingGarden = new LivingGarden(texture);
       resize();
-    } catch (videoErr) {
-      console.warn("[Flight Garden] Garden video fallback unavailable, falling back to garden.png.", videoErr);
-      try {
-        const texture = await loadGardenTexture("assets/garden.png");
-        livingGarden = new LivingGarden(texture);
-        resize();
-      } catch (pngErr) {
-        console.warn("[Flight Garden] Garden fallback texture unavailable — scene will render without a garden layer.", pngErr);
-      }
+    } catch (pngErr) {
+      console.warn("[Flight Garden] Garden fallback texture unavailable — scene will render without a garden layer.", pngErr);
     }
   })
-  .finally(beginIntro);
+  .finally(() => {
+    initHUDToggle();
+    beginIntro();
+  });
+
+loadTerminalFlowers();
 
 /* =================================================================
-   8 · ROUTE + ZONE SYSTEM
-   Corridors are drawn as additive gradient lines: bright where the
-   traffic matters (near the terminal), dissolving into the dark at
-   the garden edge. Nothing reads as a UI stroke.
+   8 · FLIGHT PATHS
+   No fixed corridors or holding stack — each flight just draws a
+   gentle curve from a random point on the cube's edge to (or from) a
+   random landing spot on its terminal flower, on the fly.
    ================================================================= */
 
-const routeLayer = new THREE.Group();
-routeLayer.renderOrder = 1;
-scene.add(routeLayer);
-
-/**
- * BLR runs two parallel runway systems: North (09L/27R) and South (09R/27L).
- * Each anchor is tagged with the system it abstractly represents — pairing
- * index 0/2 as North and 1/3 as South keeps one arrival + one departure
- * corridor per system, so both runways stay visibly active. The corridors
- * themselves are still the same glowing garden paths (RunwayLights already
- * strobes them on departure) — this only adds the real-world label.
- */
-const runwaySystemForIndex = (i) => (i % 2 === 0 ? "09L/27R · North" : "09R/27L · South");
-
-/** Edge anchors — arrivals come in low over the left/lower meadow. */
-const ARRIVAL_ANCHORS = [
-  new THREE.Vector3(-GARDEN.edgeX, -1.30, ALT.cruise),
-  new THREE.Vector3(-1.65, -GARDEN.edgeY, ALT.cruise),
-  new THREE.Vector3(-GARDEN.edgeX, 0.55, ALT.cruise),
-  new THREE.Vector3(0.50, -GARDEN.edgeY, ALT.cruise)
-];
-
-/** Departures climb out across the right/upper trail. */
-const DEPARTURE_ANCHORS = [
-  new THREE.Vector3(GARDEN.edgeX, 0.30, ALT.cruise),
-  new THREE.Vector3(1.65, GARDEN.edgeY, ALT.cruise),
-  new THREE.Vector3(GARDEN.edgeX, -0.75, ALT.cruise),
-  new THREE.Vector3(-0.40, GARDEN.edgeY, ALT.cruise)
-];
-
-/**
- * Corridor between an edge anchor and the holding ring.
- *
- * Cubic Bézier, not Catmull-Rom: a Bézier is guaranteed to stay inside the
- * hull of its control points, so a corridor can never bow out past the
- * garden frame the way an interpolating spline does.
- */
-function corridorCurve(anchor, inbound) {
-  const angle = Math.atan2(anchor.y - TERMINAL.y, anchor.x - TERMINAL.x);
-  const join = ringPoint(angle);
-
-  const dir = new THREE.Vector3().subVectors(join, anchor);
-  const perp = new THREE.Vector3(-dir.y, dir.x, 0)
-    .normalize()
-    .multiplyScalar(inbound ? 0.12 : -0.12);
-
-  const c1 = anchor.clone().addScaledVector(dir, 0.32).add(perp);
-  const c2 = anchor.clone().addScaledVector(dir, 0.72).addScaledVector(perp, 0.35);
-  c1.z = c2.z = ALT.cruise + 0.04;
-
-  return inbound
-    ? new THREE.CubicBezierCurve3(anchor.clone(), c1, c2, join)
-    : new THREE.CubicBezierCurve3(join, c2, c1, anchor.clone());
+/** A random point along the cube's inner edge, where flights enter/exit view. */
+function randomEdgePoint(z = ALT.cruise) {
+  const side = randInt(0, 3);
+  const t = rand(-1, 1);
+  switch (side) {
+    case 0: return new THREE.Vector3(-GARDEN.edgeX, t * GARDEN.edgeY, z);
+    case 1: return new THREE.Vector3(GARDEN.edgeX, t * GARDEN.edgeY, z);
+    case 2: return new THREE.Vector3(t * GARDEN.edgeX, -GARDEN.edgeY, z);
+    default: return new THREE.Vector3(t * GARDEN.edgeX, GARDEN.edgeY, z);
+  }
 }
 
 /**
- * The corridors are shared: the same curve that is drawn as a glowing route
- * is the curve the butterflies actually fly. That is what makes the overlay
- * explanatory rather than decorative.
+ * Fixed landing spots, one per petal, rather than any random point on the
+ * bloom — flights land on an actual petal, like a real terminal's gates.
+ * T1 (domestic pier) gets fewer petals than T2 (hero, international).
  */
-const ARRIVAL_CORRIDORS = [];
-const DEPARTURE_CORRIDORS = [];
+const PETAL_LANDING_COUNT = { T1: 4, T2: 6 };
+// Fraction of maxR each terminal's ring sits at — mid-petal, not center, not
+// the rim. Per-terminal so T2's circle can grow without touching T1's.
+const PETAL_LANDING_RADIUS_FRAC = { T1: 0.62, T2: 0.85 };
 
 /**
- * Additive line whose colour fades to black (= invisible) at the
- * outer end, so corridors melt into the night instead of stopping.
+ * Per-group nudge, independent of the flower's own position (TERMINAL_T1 /
+ * TERMINAL) — x moves that petal ring left(-)/right(+), y moves it
+ * down(-)/up(+), without touching the flower model itself.
  */
-function buildCorridorLine(curve, color, { fadeHead = 0.06, fadeTail = 0.55, peak = 0.85 } = {}) {
-  const N = 140;
-  const pts = curve.getPoints(N);
-  const positions = new Float32Array((N + 1) * 3);
-  const colors = new Float32Array((N + 1) * 3);
+const PETAL_LANDING_OFFSET = {
+  T1: { x: -0.2, y: 0.2 },
+  T2: { x: 0.2, y: 0.3 }
+};
 
-  for (let i = 0; i <= N; i++) {
-    const t = i / N;
-    pts[i].toArray(positions, i * 3);
-
-    // bright at the start (terminal side), dissolving outward
-    const a = Math.min(
-      smooth(t / fadeHead),
-      smooth((1 - t) / fadeTail)
-    ) * peak;
-
-    colors[i * 3 + 0] = color.r * a;
-    colors[i * 3 + 1] = color.g * a;
-    colors[i * 3 + 2] = color.b * a;
-  }
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-
-  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
-    vertexColors: true,
-    transparent: true,
-    opacity: 0,               // faded in by the intro
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  }));
-  line.renderOrder = 2;
-  return line;
-
-  function smooth(x) { return clamp(x, 0, 1) ** 0.8; }
-}
-
-/** A pulse of light travelling along a corridor. */
-class RoutePulse {
-  constructor(curve, color, speed, offset, size = 0.13) {
-    this.curve = curve;
-    this.speed = speed;
-    this.t = offset;
-
-    this.sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: GLOW_TEX,
-      color: color.clone(),
-      transparent: true,
-      opacity: 0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false
-    }));
-    this.sprite.scale.setScalar(size);
-    this.sprite.renderOrder = 3;
-    routeLayer.add(this.sprite);
-  }
-
-  update(dt, master) {
-    this.t = (this.t + dt * this.speed) % 1;
-    this.curve.getPointAt(this.t, this.sprite.position);
-
-    // fade in on entry, out on exit — no hard pops at the frame edge
-    const edge = Math.min(this.t / 0.30, (1 - this.t) / 0.30, 1);
-    this.sprite.material.opacity = clamp(edge, 0, 1) * 0.40 * master;
-  }
-}
-
-/** Sequenced "runway lights" strobing outward along a departure trail. */
-class RunwayLights {
-  constructor(curve, count = 9) {
-    this.count = count;
-    this.sprites = [];
-    this.positions = [];
-
-    for (let i = 0; i < count; i++) {
-      const t = 0.06 + (i / (count - 1)) * 0.62;
-      this.positions.push(t);
-
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: GLOW_TEX,
-        color: COLOR.departure.clone(),
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
-      }));
-      s.scale.setScalar(0.075);
-      curve.getPointAt(t, s.position);
-      s.renderOrder = 3;
-      routeLayer.add(s);
-      this.sprites.push(s);
-    }
-  }
-
-  update(elapsed, master) {
-    for (let i = 0; i < this.count; i++) {
-      // travelling wave, sharpened so each lamp reads as a discrete blink
-      const phase = Math.sin(elapsed * 2.6 - i * 0.55);
-      const strobe = Math.pow(clamp(phase, 0, 1), 3);
-      this.sprites[i].material.opacity = (0.05 + strobe * 0.40) * master;
-      this.sprites[i].scale.setScalar(0.065 + strobe * 0.045);
-    }
-  }
-}
-
-const routePulses = [];
-const runwayLights = [];
-const routeLines = [];
-const holdingRings = [];
-
-function buildRouteSystem() {
-  // --- arrival corridors (cool cyan, flowing inward) ---
-  ARRIVAL_ANCHORS.forEach((anchor, i) => {
-    const curve = corridorCurve(anchor, true);
-    const angle = Math.atan2(anchor.y - TERMINAL.y, anchor.x - TERMINAL.x);
-    ARRIVAL_CORRIDORS.push({ anchor, curve, angle, runway: runwaySystemForIndex(i) });
-
-    const line = buildCorridorLine(curve, COLOR.arrival, { fadeHead: 0.34, fadeTail: 0.12, peak: 0.90 });
-    routeLayer.add(line);
-    routeLines.push(line);
-
-    for (let p = 0; p < 2; p++) {
-      routePulses.push(new RoutePulse(curve, COLOR.arrival, rand(0.10, 0.14), (i * 0.23 + p * 0.5) % 1));
-    }
-  });
-
-  // --- departure trails (warm amber, flowing outward) ---
-  DEPARTURE_ANCHORS.forEach((anchor, i) => {
-    const curve = corridorCurve(anchor, false);
-    const angle = Math.atan2(anchor.y - TERMINAL.y, anchor.x - TERMINAL.x);
-    DEPARTURE_CORRIDORS.push({ anchor, curve, angle, runway: runwaySystemForIndex(i) });
-
-    const line = buildCorridorLine(curve, COLOR.departure, { fadeHead: 0.12, fadeTail: 0.36, peak: 0.75 });
-    routeLayer.add(line);
-    routeLines.push(line);
-
-    routePulses.push(new RoutePulse(curve, COLOR.departure, rand(0.11, 0.15), (i * 0.27) % 1));
-    runwayLights.push(new RunwayLights(curve));
-  });
-
-  // --- final approach + initial climb, linking ring to terminal ---
-  addSpoke(Math.PI * 1.20, COLOR.arrival);
-  addSpoke(Math.PI * 1.42, COLOR.arrival);
-  addSpoke(Math.PI * 0.14, COLOR.departure);
-  addSpoke(Math.PI * 0.40, COLOR.departure);
-
-  function addSpoke(angle, color) {
-    const outer = ringPoint(angle);
-    const curve = new THREE.CubicBezierCurve3(
-      outer,
-      ringPoint(angle + 0.30, HOLD_RADIUS * 0.72, lerp(ALT.cruise, ALT.ground, 0.35)),
-      ringPoint(angle + 0.10, HOLD_RADIUS * 0.34, lerp(ALT.cruise, ALT.ground, 0.78)),
-      TERMINAL.clone()
-    );
-    const line = buildCorridorLine(curve, color, { fadeHead: 0.55, fadeTail: 0.10, peak: 0.42 });
-    routeLayer.add(line);
-    routeLines.push(line);
-  }
-
-  // --- holding pattern arcs (soft white, slowly counter-rotating) ---
-  [HOLD_RADIUS, HOLD_RADIUS + 0.18].forEach((radius, i) => {
-    const ring = buildHoldingRing(radius, i === 0 ? 0.30 : 0.16);
-    ring.userData.spin = i === 0 ? 0.020 : -0.014;
-    routeLayer.add(ring);
-    holdingRings.push(ring);
-  });
-}
-
-/** Dashed circle rendered as short additive segments. */
-function buildHoldingRing(radius, brightness) {
-  const dashes = 96;
-  const positions = [];
-  const colors = [];
-
-  for (let i = 0; i < dashes; i++) {
-    const a0 = (i / dashes) * Math.PI * 2;
-    const a1 = a0 + (Math.PI * 2 / dashes) * 0.45;
-
-    // let the ring breathe: brighter in the holding quadrants
-    const w = 0.55 + 0.45 * Math.abs(Math.sin(a0 * 2));
-
-    for (const a of [a0, a1]) {
-      positions.push(Math.cos(a) * radius, Math.sin(a) * radius, ALT.cruise - 0.02);
-      colors.push(brightness * w, brightness * w, brightness * w);
-    }
-  }
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-
-  const ring = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-    vertexColors: true,
-    transparent: true,
-    opacity: 0,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  }));
-  ring.position.set(TERMINAL.x, TERMINAL.y, 0);
-  ring.renderOrder = 2;
-  return ring;
-}
-
-buildRouteSystem();
-
-/* =================================================================
-   9 · GATES
-   Six gate markers sit on the petals of the bloom.
-   ================================================================= */
-
-const gateLayer = new THREE.Group();
-scene.add(gateLayer);
-
-const gates = [];
-
-/**
- * Gate index → real-world-referenced pier id. The first T2_GATE_COUNT gates
- * are Terminal 2's "C" pier (hero, garden-themed); the rest are Terminal 1's
- * "D" pier (domestic). Contiguous index ranges keep each pier a contiguous
- * arc of petals rather than interleaving the two terminals around the bloom.
- */
-function gateIdentity(i) {
-  return i < T2_GATE_COUNT
-    ? { id: `C${i + 1}`, terminal: "T2" }
-    : { id: `D${i - T2_GATE_COUNT + 1}`, terminal: "T1" };
-}
-
-function buildGates() {
-  const ringGeo = new THREE.RingGeometry(0.052, 0.068, 40);
-
-  for (let i = 0; i < GATE_COUNT; i++) {
-    const { id, terminal } = gateIdentity(i);
+const PETAL_LANDING_SPOTS = (() => {
+  const maxR = { T1: 0.38, T2: 0.46 };
+  const spots = {};
+  for (const terminal of ["T1", "T2"]) {
     const center = terminal === "T1" ? TERMINAL_T1 : TERMINAL;
-    const radius = terminal === "T1" ? GATE_RADIUS_T1 : GATE_RADIUS;
-    const angle = -Math.PI * 0.55 + (i / GATE_COUNT) * Math.PI * 2;
-    const position = new THREE.Vector3(
-      center.x + Math.cos(angle) * radius,
-      center.y + Math.sin(angle) * radius,
-      ALT.ground + 0.18
-    );
-
-    const marker = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    }));
-    marker.position.copy(position);
-    marker.renderOrder = 4;
-    marker.visible = false; // Hide the ring marker outline mesh
-    gateLayer.add(marker);
-
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: GLOW_TEX,
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false
-    }));
-    glow.scale.setScalar(0.20);
-    glow.position.copy(position);
-    glow.renderOrder = 4;
-    gateLayer.add(glow);
-
-    const label = document.createElement("div");
-    label.className = "gate-label";
-    label.classList.add(terminal === "T2" ? "gate-t2" : "gate-t1");
-    label.textContent = id;
-    labelLayer.appendChild(label);
-
-    // nudge the caption outward so it never covers its own ring
-    const labelPos = position.clone().add(
-      new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0).multiplyScalar(0.115)
-    );
-
-    gates.push({
-      id,
-      terminal,
-      position,
-      labelPos,
-      angle,
-      marker,
-      glow,
-      label,
-      occupant: null,   // butterfly currently parked
-      reserved: null,   // butterfly inbound to this gate
-
-      // --- living state, consumed by LivingGarden's shader ---
-      aura: 0,                            // sustained glow, 0..1
-      flash: 0,                           // transient burst, decays fast
-      auraColor: new THREE.Color().copy(COLOR.terminal),
-      phase: Math.random() * Math.PI * 2
+    const offset = PETAL_LANDING_OFFSET[terminal];
+    const count = PETAL_LANDING_COUNT[terminal];
+    const r = maxR[terminal] * PETAL_LANDING_RADIUS_FRAC[terminal];
+    spots[terminal] = Array.from({ length: count }, (_, i) => {
+      const angle = (i / count) * Math.PI * 2;
+      return new THREE.Vector3(
+        center.x + offset.x + Math.cos(angle) * r,
+        center.y + offset.y + Math.sin(angle) * r,
+        ALT.ground
+      );
     });
   }
+  return spots;
+})();
+
+/** Which petal index is currently taken, per terminal — one butterfly per petal at a time. */
+const petalOccupied = {
+  T1: new Array(PETAL_LANDING_COUNT.T1).fill(false),
+  T2: new Array(PETAL_LANDING_COUNT.T2).fill(false)
+};
+
+/**
+ * Claims a free petal on `terminal`, marking it occupied. If every petal is
+ * already taken (more inbound flights than petals), falls back to a random
+ * occupied one rather than blocking — a flight briefly sharing a busy petal
+ * reads better than one stuck stalling in midair forever.
+ */
+function claimLandingSpot(terminal) {
+  const occ = petalOccupied[terminal];
+  const free = [];
+  for (let i = 0; i < occ.length; i++) if (!occ[i]) free.push(i);
+  const index = free.length ? pick(free) : randInt(0, occ.length - 1);
+  occ[index] = true;
+  return { index, position: PETAL_LANDING_SPOTS[terminal][index].clone() };
 }
 
-const isGateFree = (g) => !g.occupant && !g.reserved;
-const freeGates = () => gates.filter(isGateFree);
+/** Frees a previously claimed petal so another flight can land on it. */
+function releaseLandingSpot(terminal, index) {
+  if (index == null) return;
+  petalOccupied[terminal][index] = false;
+}
+
+/**
+ * Gentle cubic-Bézier path between two points, whichever direction — the
+ * midpoint control points just interpolate altitude smoothly between the
+ * two ends, so the same helper covers both arrivals (cruise → ground) and
+ * departures (ground → cruise).
+ */
+function flightCurve(from, to) {
+  const c1 = from.clone().lerp(to, 0.33);
+  c1.z = lerp(from.z, to.z, 0.45);
+  const c2 = from.clone().lerp(to, 0.66);
+  c2.z = lerp(from.z, to.z, 0.85);
+  return new THREE.CubicBezierCurve3(from.clone(), c1, c2, to.clone());
+}
+
+/* =================================================================
+   9 · TERMINAL ROUTING + LANDING PULSE
+   No fixed gates — a flight just picks a terminal (domestic vs
+   international, mirroring BLR's real split) and lands at a random
+   spot on that flower. The pulse ring is a generic "the garden
+   noticed" flourish, reused for both touchdown and takeoff.
+   ================================================================= */
 
 /** Indian domestic sectors — everything else routes through the T2 (hero) pier. */
 const DOMESTIC_CODES = new Set(["BLR", "DEL", "BOM", "MAA", "HYD", "CCU", "GOI"]);
 
-/** Which pier a flight belongs on, mirroring BLR's real domestic/international split. */
+/** Which flower a flight belongs on, mirroring BLR's real domestic/international split. */
 function routeTerminal(flight) {
   const other = flight.kind === "arrival" ? flight.origin : flight.destination;
   return DOMESTIC_CODES.has(other) ? "T1" : "T2";
 }
 
-/** Gates on the flight's own pier first; falls back to any free gate rather
- *  than stalling the sim if that pier happens to be full. */
-function freeGatesFor(flight) {
-  const free = freeGates();
-  const onPier = free.filter((g) => g.terminal === routeTerminal(flight));
-  return onPier.length ? onPier : free;
-}
-
-/* ---------------- gate reactions to flight events ---------------- */
-
-const _gateEventColor = new THREE.Color();
-const WHITE = new THREE.Color(0xffffff);
-
-/**
- * Called from Butterfly state transitions. The gate is the garden's way of
- * showing that it noticed — a landing blooms it, a takeoff releases it.
- */
-function gateEvent(gate, type) {
-  if (!gate) return;
-
-  switch (type) {
-    case "land":
-      gate.flash = 1;
-      _gateEventColor.copy(COLOR.arrival).lerp(WHITE, 0.18);
-      spawnGatePulse(gate.position, _gateEventColor);
-      emitSparkles(gate.position, _gateEventColor, 18, 0.06, 0.30);
-      break;
-
-    case "takeoff":
-      gate.flash = 1;
-      spawnGatePulse(gate.position, COLOR.departure);
-      emitSparkles(gate.position, COLOR.departure, 22, 0.07, 0.44);
-      break;
-  }
-}
-
 /* ---------------- pooled expanding pulse rings ---------------- */
+
+const pulseLayer = new THREE.Group();
+scene.add(pulseLayer);
+
+const WHITE = new THREE.Color(0xffffff);
+const _landColor = new THREE.Color();
 
 const PULSE_MAX = 6;
 const pulseRings = [];
@@ -1720,19 +1135,20 @@ function buildPulseRings() {
       opacity: 0,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
+      depthTest: false,
       side: THREE.DoubleSide
     }));
     mesh.visible = false;
     mesh.renderOrder = 4;
-    gateLayer.add(mesh);
+    pulseLayer.add(mesh);
     pulseRings.push({ mesh, life: 0 });
   }
 }
 
 let pulseCursor = 0;
 
-function spawnGatePulse(position, color) {
-  // reuse the deadest ring rather than allocating; six is plenty for six gates
+function spawnPulse(position, color) {
+  // reuse the deadest ring rather than allocating
   let slot = pulseRings.find((p) => p.life <= 0);
   if (!slot) { slot = pulseRings[pulseCursor]; pulseCursor = (pulseCursor + 1) % PULSE_MAX; }
 
@@ -1742,7 +1158,7 @@ function spawnGatePulse(position, color) {
   slot.mesh.visible = true;
 }
 
-function updateGatePulses(dt, master) {
+function updatePulses(dt, master) {
   for (const p of pulseRings) {
     if (p.life <= 0) continue;
 
@@ -1755,67 +1171,6 @@ function updateGatePulses(dt, master) {
   }
 }
 
-/* ---------------- per-frame gate aura ---------------- */
-
-const _gateTarget = new THREE.Color();
-
-function updateGates(dt, elapsed, master) {
-  for (const gate of gates) {
-    const occupant = gate.occupant;
-    const reserved = gate.reserved;
-    const busy = !!occupant;
-    const inbound = !!reserved;
-
-    // Each state gets its own light. This is the whole reactive contract:
-    // approach → cool build, parked → the flight's own livery breathing,
-    // boarding → amber warm-up, empty → a barely-there pilot light.
-    // Boarding stays well under 1: the gate aura, the butterfly's halo sprite,
-    // its wing highlight and the bloom pass all stack on the same few pixels,
-    // and a "warm amber" that saturates to white hides the aircraft entirely.
-    let target;
-    if (occupant && occupant.state === "boarding") {
-      _gateTarget.copy(COLOR.departure);
-      target = 0.62;
-    } else if (occupant) {
-      _gateTarget.copy(occupant.airline.threeColor);
-      target = 0.46;
-    } else if (reserved && reserved.state === "final") {
-      _gateTarget.copy(COLOR.arrival);
-      target = 0.80;
-    } else if (reserved) {
-      _gateTarget.copy(COLOR.arrival);
-      target = 0.30;
-    } else {
-      _gateTarget.copy(COLOR.terminal);
-      target = 0.09;
-    }
-
-    // Breathe: fast and shallow when a flight is on final, slow and deep when
-    // an aircraft is simply resting on the petal.
-    const restRate = busy ? 0.9 : inbound ? 3.2 : 1.4;
-    const restDepth = busy ? 0.20 : inbound ? 0.28 : 0.16;
-    const breath = 1 - restDepth + restDepth * (0.5 + 0.5 * Math.sin(elapsed * restRate + gate.phase));
-
-    gate.aura += (target * breath - gate.aura) * Math.min(1, dt * 2.6);
-    gate.flash = Math.max(0, gate.flash - dt * 1.9);
-    gate.auraColor.lerp(_gateTarget, Math.min(1, dt * 4));
-
-    const lit = gate.aura + gate.flash * 0.8;
-
-    gate.marker.material.color.copy(gate.auraColor);
-    gate.glow.material.color.copy(gate.auraColor);
-    gate.marker.material.opacity = (0.12 + lit * 0.38) * master;
-    gate.glow.material.opacity = (0.04 + lit * 0.19) * master;
-    gate.marker.scale.setScalar(1 + lit * 0.18);
-
-    // a parked flight rests in its own soft, breathing pool of light
-    gate.glow.scale.setScalar(0.20 + lit * 0.14);
-
-    gate.label.classList.toggle("occupied", busy);
-    gate.label.classList.toggle("inbound", inbound && !busy);
-  }
-}
-
 /* =================================================================
    10 · ZONE LABELS (projected DOM — crisp type, no texture atlas)
    ================================================================= */
@@ -1823,13 +1178,8 @@ function updateGates(dt, elapsed, master) {
 const labelLayer = document.getElementById("labelLayer");
 
 const ZONES = [
-  { kind: "terminal", name: "Terminal 1", note: "Domestic · D1–D4", pos: new THREE.Vector3(TERMINAL_T1.x, TERMINAL_T1.y + 0.72, ALT.ground) },
-  { kind: "terminal", name: "Terminal 2", note: "Garden Terminal · C1–C6", pos: new THREE.Vector3(TERMINAL.x, TERMINAL.y + 0.72, ALT.ground) },
-  { kind: "arrival", name: "Arrival Meadow", note: "Inbound traffic", pos: new THREE.Vector3(-1.62, -1.66, ALT.ground) },
-  { kind: "departure", name: "Departure Trail", note: "Outbound climb", pos: new THREE.Vector3(1.28, 1.56, ALT.ground) },
-  { kind: "holding", name: "Holding Pattern", note: "Stacked, waiting", pos: new THREE.Vector3(0.68, -1.54, ALT.ground) },
-  { kind: "runway", name: "North Runway", note: "09L / 27R", pos: new THREE.Vector3(0.05, 1.82, ALT.ground) },
-  { kind: "runway", name: "South Runway", note: "09R / 27L", pos: new THREE.Vector3(-0.55, -1.86, ALT.ground) }
+  { kind: "terminal", name: "Terminal 1", note: "Domestic", pos: new THREE.Vector3(TERMINAL_T1.x, TERMINAL_T1.y + 0.72, ALT.ground) },
+  { kind: "terminal", name: "Terminal 2", note: "Garden Terminal", pos: new THREE.Vector3(TERMINAL.x, TERMINAL.y + 0.72, ALT.ground) }
 ];
 
 function buildZoneLabels() {
@@ -1878,15 +1228,12 @@ function projectLabel(el, worldPos, visible) {
  */
 const REDUCED_MOTION = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 const ZONE_REVEAL_AT = REDUCED_MOTION ? 0.2 : 4.2;
-const GATE_REVEAL_AT = REDUCED_MOTION ? 0.3 : 4.6;
 
 function updateLabels() {
   for (const zone of ZONES) projectLabel(zone.el, zone.pos, introTime > ZONE_REVEAL_AT);
-  for (const gate of gates) projectLabel(gate.label, gate.labelPos, introTime > GATE_REVEAL_AT);
   labelMetricsDirty = false;
 }
 
-buildGates();
 buildPulseRings();
 buildZoneLabels();
 
@@ -1896,8 +1243,8 @@ buildZoneLabels();
    even when the airport is quiet.
    ================================================================= */
 
-const MOTE_COUNT = 660;
-const FIREFLY_SHARE = 0.14;
+const MOTE_COUNT = 900;
+const FIREFLY_SHARE = 0.22;
 
 /**
  * Drift, wrap and twinkle all happen in the vertex shader, so this layer costs
@@ -1933,13 +1280,13 @@ const MOTE_VERT = /* glsl */`
 
     vAlpha = mix(shimmer, blink, firefly);
     vColor = mix(
-      mix(vec3(1.0, 0.85, 0.62), vec3(0.62, 0.90, 1.0), step(0.6, aSeed)),  // pollen
-      vec3(0.55, 0.92, 1.0),                                                // firefly
+      mix(vec3(1.0, 0.85, 0.62), vec3(0.62, 0.90, 1.0), step(0.75, aSeed)), // pollen, gold-biased
+      vec3(1.0, 0.88, 0.55),                                                // firefly, warm gold
       firefly
     );
 
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
-    gl_PointSize = mix(0.042, 0.075, firefly) * (uScale / -mv.z);
+    gl_PointSize = mix(0.065, 0.115, firefly) * (uScale / -mv.z);
     gl_Position = projectionMatrix * mv;
   }
 `;
@@ -1980,12 +1327,14 @@ const motes = (() => {
       const r = Math.pow(Math.random(), 0.5) * 0.62;   // denser toward the centre
       positions[i * 3 + 0] = TERMINAL.x + Math.cos(a) * r;
       positions[i * 3 + 1] = TERMINAL.y + Math.sin(a) * r;
-      positions[i * 3 + 2] = rand(0.30, 0.70);
+      positions[i * 3 + 2] = rand(0.10, 1.55);
     } else {
-      // keep the sway inside the frame's inner opening
+      // keep the sway inside the frame's inner opening, but now spanning
+      // the cube's full height (floor to just under the rim) instead of a
+      // shallow slice, so the field reads as filling the whole volume
       positions[i * 3 + 0] = rand(-GARDEN.innerX + 0.12, GARDEN.innerX - 0.12);
       positions[i * 3 + 1] = rand(-GARDEN.innerY, GARDEN.innerY);
-      positions[i * 3 + 2] = rand(0.32, 1.05);
+      positions[i * 3 + 2] = rand(0.05, 1.65);
     }
 
     // seeds below 0.6 read as the warm/gold pollen colour in MOTE_VERT, so
@@ -1994,7 +1343,7 @@ const motes = (() => {
     kinds[i] = nearTerminal ? 0 : (Math.random() < FIREFLY_SHARE ? 1 : 0);
 
     drift[i * 2 + 0] = rand(-0.05, 0.05);
-    drift[i * 2 + 1] = kinds[i] ? rand(0.004, 0.016) : rand(0.010, 0.048);
+    drift[i * 2 + 1] = kinds[i] ? rand(0.006, 0.022) : rand(0.014, 0.065);
   }
 
   const geo = new THREE.BufferGeometry();
@@ -2014,7 +1363,8 @@ const motes = (() => {
     },
     transparent: true,
     blending: THREE.AdditiveBlending,
-    depthWrite: false
+    depthWrite: false,
+    depthTest: false
   });
 
   const points = new THREE.Points(geo, mat);
@@ -2027,7 +1377,124 @@ const motes = (() => {
 
 function updateMotes(elapsed, master) {
   motes.mat.uniforms.uTime.value = elapsed;
-  motes.mat.uniforms.uMaster.value = 0.62 * master;
+  motes.mat.uniforms.uMaster.value = 0.78 * master;
+}
+
+/* =================================================================
+   11B · GRASS DUST FILL — a dense field of grass-toned specks laid
+   over the foliage so the cube's interior reads as a rushing, packed
+   point cloud rather than a flat carpet. Sits above the grass in the
+   depth buffer (like the motes) so density is never lost to occlusion,
+   and steers clear of both terminal blooms so the flowers stay clean.
+   ================================================================= */
+
+const GRASS_DUST_COUNT = 6000;
+
+const GRASS_DUST_VERT = /* glsl */`
+  attribute float aSeed;
+  attribute float aSize;
+
+  uniform float uTime;
+  uniform float uScale;
+
+  varying vec3  vColor;
+  varying float vAlpha;
+
+  void main(){
+    vec3 p = position;
+
+    // small wind-sway — enough to read as "alive," never enough to
+    // break the illusion of a packed, static-ish scatter
+    p.x += sin(uTime * 0.55 + aSeed * 8.3) * 0.012;
+    p.y += cos(uTime * 0.47 + aSeed * 6.1) * 0.012;
+
+    // brisk shimmer per-speck gives the "rushing" flicker of light off
+    // a dense point cloud, independent of the slower sway above
+    float shimmer = 0.5 + 0.5 * sin(uTime * (1.4 + aSeed * 2.2) + aSeed * 40.0);
+    vAlpha = mix(0.45, 1.0, shimmer);
+
+    vec3 deep      = vec3(0.045, 0.16, 0.045);
+    vec3 mid       = vec3(0.14, 0.38, 0.09);
+    vec3 highlight = vec3(0.56, 0.74, 0.24);
+    vec3 col = mix(deep, mid, smoothstep(0.0, 0.6, aSeed));
+    col = mix(col, highlight, smoothstep(0.65, 1.0, aSeed));
+    vColor = col;
+
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    gl_PointSize = aSize * (uScale / -mv.z);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const GRASS_DUST_FRAG = /* glsl */`
+  precision mediump float;
+
+  uniform float uMaster;
+  varying vec3  vColor;
+  varying float vAlpha;
+
+  void main(){
+    float d = length(gl_PointCoord - 0.5);
+    float a = smoothstep(0.5, 0.05, d) * vAlpha * uMaster * 0.85;
+    gl_FragColor = vec4(vColor, a);
+  }
+`;
+
+const grassDust = (() => {
+  const positions = new Float32Array(GRASS_DUST_COUNT * 3);
+  const seeds = new Float32Array(GRASS_DUST_COUNT);
+  const sizes = new Float32Array(GRASS_DUST_COUNT);
+
+  const terminals = [TERMINAL, TERMINAL_T1];
+  const exclusionRadius = 0.85;
+
+  let i = 0;
+  let guard = 0;
+  while (i < GRASS_DUST_COUNT && guard < GRASS_DUST_COUNT * 8) {
+    guard++;
+    const x = rand(-GARDEN.innerX + 0.08, GARDEN.innerX - 0.08);
+    const y = rand(-GARDEN.innerY + 0.08, GARDEN.innerY - 0.08);
+    const tooCloseToBloom = terminals.some((t) => Math.hypot(x - t.x, y - t.y) < exclusionRadius);
+    if (tooCloseToBloom) continue;
+
+    positions[i * 3 + 0] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = rand(0.06, 0.30);
+    seeds[i] = Math.random();
+    sizes[i] = rand(0.010, 0.026);
+    i++;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute("aSeed", new THREE.BufferAttribute(seeds, 1));
+  geo.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
+  geo.setDrawRange(0, i);
+
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: GRASS_DUST_VERT,
+    fragmentShader: GRASS_DUST_FRAG,
+    uniforms: {
+      uTime: { value: 0 },
+      uMaster: { value: 0 },
+      uScale: { value: 450 }
+    },
+    transparent: true,
+    depthWrite: false,
+    depthTest: false
+  });
+
+  const points = new THREE.Points(geo, mat);
+  points.frustumCulled = false;
+  points.renderOrder = 4;
+  scene.add(points);
+
+  return { points, geo, mat };
+})();
+
+function updateGrassDust(elapsed, master) {
+  grassDust.mat.uniforms.uTime.value = elapsed;
+  grassDust.mat.uniforms.uMaster.value = master;
 }
 
 /* =================================================================
@@ -2058,7 +1525,8 @@ const sparkles = (() => {
     transparent: true,
     opacity: 0.95,
     blending: THREE.AdditiveBlending,
-    depthWrite: false
+    depthWrite: false,
+    depthTest: false
   });
 
   const points = new THREE.Points(geo, mat);
@@ -2194,6 +1662,7 @@ class TrailRibbon {
       opacity: 1,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
+      depthTest: false,
       side: THREE.DoubleSide
     });
 
@@ -2243,8 +1712,8 @@ class TrailRibbon {
       this.mesh.visible = false;
       return;
     }
-    this.mesh.visible = false; // Force trail to be invisible
-    return; // Skip geometry calculations since it's hidden
+    this.mesh.visible = false; // trails disabled — butterflies fly clean
+    return;
 
     const n = pts.length;
     const width = this.baseWidth * this.widthScale;
@@ -2330,7 +1799,7 @@ let flightSeq = 0;
  * `airlineCode` pins the carrier — a parked aircraft keeps its livery when it
  * turns around into a departure, so the flight number must match it too.
  * `terminal` ("T1"/"T2"), when given, biases the route to a city on that
- * pier — used so a flight seeded straight onto a gate matches its pier.
+ * pier — used so a flight seeded straight onto a flower matches its pier.
  */
 function makeFlight(kind, airportCode, airlineCode, terminal) {
   const code = airlineCode ?? pick(AIRLINE_CODES);
@@ -2369,19 +1838,20 @@ const routeLong = (f) => `${CITIES[f.origin] ?? f.origin} → ${CITIES[f.destina
 
 /* =================================================================
    15 · BUTTERFLY — a flight with wings
-   States: inbound → (holding) → final → parked → boarding → climb → gone
+   States: inbound → parked → boarding → climb → gone
    ================================================================= */
 
 const butterflies = [];
 
 class Butterfly {
-  constructor(flight, gate, opts = {}) {
+  constructor(flight, terminal, opts = {}) {
     this.flight = flight;
     this.airline = flight.airline;
-    this.gate = gate;
+    this.terminal = terminal;
 
     this.position = new THREE.Vector3();
     this.heading = 0;
+    this.restHeading = rand(0, Math.PI * 2);
     this.bank = 0;
     this.speed = 0;
     this.dead = false;
@@ -2392,21 +1862,22 @@ class Butterfly {
     this.flutter = rand(0.85, 1.25);
     this.wanderSeed = rand(0, Math.PI * 2);
     this.wanderAmp = rand(0.012, 0.030);
-    this.lane = rand(-0.09, 0.09);   // lateral offset so shared corridors spread
+    this.lane = rand(-0.09, 0.09);   // lateral offset so flight paths spread apart
     this.weaveAmp = rand(0.035, 0.070);
     this.weaveTurns = rand(2.2, 3.6);
 
     // wing character: a unique speckle field, and how much livery shows through
     this.seed = Math.random();
-    this.tint = rand(0.28, 0.46);
+    this.tint = rand(0.85, 1.0);
     this._styledState = null;
 
     this.curve = null;
     this.curveLen = 1;
     this.u = 0;
 
-    this.holdAngle = 0;
-    this.holdTimer = 0;
+    this.landingIndex = null;
+    this.landingSpot = null;
+    this.claimLanding(terminal);
     this.dwellTimer = 0;
     this.boardTimer = 0;
     this.dustTimer = rand(0, 0.15);
@@ -2419,11 +1890,19 @@ class Butterfly {
     this.trail = new TrailRibbon();
 
     if (opts.spawnParked) this.enterParked(true);
-    else if (flight.kind === "arrival") this.enterInbound(opts.forceHold);
+    else if (flight.kind === "arrival") this.enterInbound();
     else this.enterBoarding();
   }
 
   /* ---------------- construction ---------------- */
+
+  /** Releases any petal this butterfly currently holds, then claims a fresh one on `terminal`. */
+  claimLanding(terminal) {
+    releaseLandingSpot(this.terminal, this.landingIndex);
+    const { index, position } = claimLandingSpot(terminal);
+    this.landingIndex = index;
+    this.landingSpot = position;
+  }
 
   buildMesh() {
     const color = this.airline.threeColor;
@@ -2431,7 +1910,7 @@ class Butterfly {
     this.mesh = new THREE.Group();
     this.mesh.rotation.order = "ZYX";   // heading → bank → pitch
     this.mesh.renderOrder = 10;
-    this.mesh.scale.setScalar(0.6);      // Reduce butterfly size by 40%
+    this.mesh.scale.setScalar(0.6 * BUTTERFLY_SCALE);      // Reduce butterfly size by 40%
     scene.add(this.mesh);
 
     // wings: two half-planes sharing a centreline, each on its own pivot
@@ -2457,7 +1936,8 @@ class Butterfly {
       color: 0x1b2a4d,
       transparent: true,
       opacity: 1,
-      depthWrite: false
+      depthWrite: false,
+      depthTest: false
     });
 
     // body sits just in front of the wings so it always reads
@@ -2491,7 +1971,8 @@ class Butterfly {
       transparent: true,
       opacity: 0,
       blending: THREE.AdditiveBlending,
-      depthWrite: false
+      depthWrite: false,
+      depthTest: false
     });
     this.glow = new THREE.Sprite(this.glowMat);
     this.glow.scale.setScalar(0.42);
@@ -2507,7 +1988,8 @@ class Butterfly {
       transparent: true,
       opacity: 0,
       blending: THREE.AdditiveBlending,
-      depthWrite: false
+      depthWrite: false,
+      depthTest: false
     });
     this.coreGlow = new THREE.Sprite(this.coreGlowMat);
     this.coreGlow.scale.setScalar(0.15);
@@ -2531,93 +2013,47 @@ class Butterfly {
     this.u = 0;
   }
 
-  /** Ride one of the four drawn arrival corridors down to the ring. */
-  enterInbound(forceHold) {
+  /** Fly straight in from a random point on the cube's edge to a landing spot. */
+  enterInbound() {
     this.state = "inbound";
-
-    const corridor = pick(ARRIVAL_CORRIDORS);
-    this.willHold = forceHold ?? Math.random() < 0.35;
-    this.holdAngle = corridor.angle;
-    this.holdTimer = rand(7, 15);
-
-    this.setCurve(corridor.curve);
+    this.claimLanding(this.terminal);
+    this.setCurve(flightCurve(randomEdgePoint(ALT.cruise), this.landingSpot));
 
     this.curve.getPointAt(0, this.position);
     this.mesh.position.copy(this.position);
     this.opacity = 0;
   }
 
-  /** Ring → gate: a descending, tightening arc onto the petal. */
-  approachCurve(from, entryAngle) {
-    const outward = new THREE.Vector3(
-      Math.cos(this.gate.angle),
-      Math.sin(this.gate.angle),
-      0
-    ).multiplyScalar(0.42);
-
-    // Lead with the flight's *current* heading, not the ring's tangent, so the
-    // join is C1-continuous. Otherwise the turn onto final is a hard elbow and
-    // the trail creases visibly behind it.
-    const lead = new THREE.Vector3(this._tangent.x, this._tangent.y, 0);
-    if (lead.lengthSq() < 1e-8) lead.set(-Math.sin(entryAngle), Math.cos(entryAngle), 0);
-    lead.normalize().multiplyScalar(0.5);
-
-    const c1 = from.clone().add(lead);
-    const c2 = ringPoint(entryAngle + 0.25, HOLD_RADIUS * 0.45, lerp(ALT.cruise, ALT.ground, 0.7));
-
-    return new THREE.CubicBezierCurve3(
-      from.clone(),
-      c1,
-      c2.add(outward),
-      this.gate.position.clone()
-    );
-  }
-
-  enterHolding() {
-    this.state = "holding";
-    this.holdAngle = Math.atan2(
-      this.position.y - TERMINAL.y,
-      this.position.x - TERMINAL.x
-    );
-    this.holdRadius = HOLD_RADIUS + rand(-0.05, 0.14);
-  }
-
-  enterFinal() {
-    this.state = "final";
-    this.setCurve(this.approachCurve(this.position.clone(), this.holdAngle));
-  }
-
   enterParked(instant = false) {
     this.state = "parked";
-    this.gate.reserved = null;
-    this.gate.occupant = this;
     this.flight.kind = "arrival";
 
-    this.position.copy(this.gate.position);
+    this.position.copy(this.landingSpot);
     this.mesh.position.copy(this.position);
     this.speed = 0;
     this.dwellTimer = rand(11, 22) / sim.intensity;
+    this.restHeading = rand(0, Math.PI * 2);
 
     if (instant) {
       this.opacity = 1;
-      this.heading = this.gate.angle + Math.PI / 2;
+      this.heading = this.restHeading;
     } else {
-      // touchdown: the flower blooms brighter for a moment
-      gateEvent(this.gate, "land");
+      // touchdown: a bloom of light where it landed
+      spawnPulse(this.position, _landColor.copy(COLOR.arrival).lerp(WHITE, 0.18));
+      emitSparkles(this.position, COLOR.arrival, 18, 0.06, 0.30);
+      triggerFlowerReaction(this.terminal, 1.4);
     }
   }
 
   /** A parked flight becomes a departure: new flight number, new route. */
   enterBoarding() {
     this.state = "boarding";
-    this.gate.occupant = this;
-    this.gate.reserved = null;
 
     // Same aircraft, same livery — so the same carrier, and a flight number
     // drawn from that carrier's range rather than a random one.
-    this.flight = makeFlight("departure", sim.code, this.airline.code, this.gate.terminal);
+    this.flight = makeFlight("departure", sim.code, this.airline.code, this.terminal);
 
-    this.position.copy(this.gate.position);
+    this.position.copy(this.landingSpot);
     this.mesh.position.copy(this.position);
     this.boardTimer = rand(2.4, 3.8);
     this.opacity = Math.max(this.opacity, 0.001);
@@ -2626,43 +2062,20 @@ class Butterfly {
   enterClimb() {
     this.state = "climb";
 
-    // rotation: the gate releases a pulse of light as the stand frees up
-    gateEvent(this.gate, "takeoff");
-    this.gate.occupant = null;
-    this.gate = null;
+    // a flight already sitting on the flower simply flies back out
+    spawnPulse(this.position, COLOR.departure);
+    emitSparkles(this.position, COLOR.departure, 22, 0.07, 0.44);
+    triggerFlowerReaction(this.terminal, 1.0);
 
-    const corridor = pick(DEPARTURE_CORRIDORS);
-    const exitAngle = corridor.angle;
+    // free the petal the moment it lifts off, so another flight can claim it
+    releaseLandingSpot(this.terminal, this.landingIndex);
+    this.landingIndex = null;
 
-    // Climb-out spoke: gate → the ring, gaining altitude the whole way.
-    const c1 = this.position.clone().add(new THREE.Vector3(
-      Math.cos(exitAngle) * 0.5,
-      Math.sin(exitAngle) * 0.5,
-      0.16
-    ));
-    const c2 = ringPoint(exitAngle - 0.30, HOLD_RADIUS * 0.70, lerp(ALT.ground, ALT.cruise, 0.75));
-
-    const spoke = new THREE.CubicBezierCurve3(
-      this.position.clone(), c1, c2, ringPoint(exitAngle)
-    );
-
-    // Then hand off to the drawn departure trail and ride it out of frame.
-    const path = new THREE.CurvePath();
-    path.add(spoke);
-    path.add(corridor.curve);
-    this.setCurve(path);
+    this.setCurve(flightCurve(this.position.clone(), randomEdgePoint(ALT.cruise)));
   }
 
   enterGone() {
     this.state = "gone";
-    this.releaseGate();
-  }
-
-  releaseGate() {
-    if (!this.gate) return;
-    if (this.gate.occupant === this) this.gate.occupant = null;
-    if (this.gate.reserved === this) this.gate.reserved = null;
-    this.gate = null;
   }
 
   /* ---------------- per-frame ---------------- */
@@ -2677,8 +2090,6 @@ class Butterfly {
 
     switch (this.state) {
       case "inbound": this.updateInbound(dt); break;
-      case "holding": this.updateHolding(dt); break;
-      case "final": this.updateFinal(dt); break;
       case "parked": this.updateParked(dt); break;
       case "boarding": this.updateBoarding(dt); break;
       case "climb": this.updateClimb(dt); break;
@@ -2726,50 +2137,20 @@ class Butterfly {
   }
 
   updateInbound(dt) {
-    // Fade against path progress, not wall time: corridors differ in length,
-    // and a flight must be fully solid by the time it reaches the stack.
+    // Fade against path progress, not wall time: flight paths differ in
+    // length, and a flight must be fully solid well before it lands.
     this.opacity = clamp(this.u / 0.20, 0, 1);
 
-    // decelerate down the corridor — arrivals *arrive*
-    const speed = lerp(1.20, 0.78, easeInOutSine(this.u));
+    // decelerate on the way in — arrivals *arrive*
+    const speed = lerp(1.20, 0.14, easeInOutSine(this.u));
 
-    if (this.advance(dt, speed)) {
-      if (this.willHold) this.enterHolding();
-      else this.enterFinal();
-    }
-  }
-
-  updateHolding(dt) {
-    this.opacity = Math.min(1, this.opacity + dt * 1.1);
-    this.holdTimer -= dt;
-
-    const angularSpeed = 0.72 / this.holdRadius;
-    this.holdAngle += angularSpeed * dt;
-
-    this.position.set(
-      TERMINAL.x + Math.cos(this.holdAngle) * this.holdRadius,
-      TERMINAL.y + Math.sin(this.holdAngle) * this.holdRadius,
-      ALT.cruise + Math.sin(this.holdAngle * 3) * 0.03
-    );
-
-    this._tangent.set(-Math.sin(this.holdAngle), Math.cos(this.holdAngle), 0);
-    this.speed = 0.72;
-
-    // only leave the stack once the gate is genuinely ours
-    if (this.holdTimer <= 0 && this.gate && this.gate.reserved === this) {
-      this.enterFinal();
-    }
-  }
-
-  updateFinal(dt) {
-    const speed = lerp(0.72, 0.14, easeOutCubic(this.u));
     if (this.advance(dt, speed)) this.enterParked();
   }
 
   updateParked(dt) {
     this.speed = 0;
     this.dwellTimer -= dt;
-    this.position.copy(this.gate.position);
+    this.position.copy(this.landingSpot);
     if (this.dwellTimer <= 0) this.enterBoarding();
   }
 
@@ -2782,7 +2163,7 @@ class Butterfly {
     const t = 1 - clamp(this.boardTimer / 3.0, 0, 1);
     this.highlight = Math.sin(t * Math.PI) * 0.55 + easeInCubic(t) * 0.35;
 
-    this.position.copy(this.gate.position);
+    this.position.copy(this.landingSpot);
     if (this.boardTimer <= 0) this.enterClimb();
   }
 
@@ -2826,8 +2207,7 @@ class Butterfly {
       const targetBank = clamp((turn / Math.max(dt, 1e-4)) * 0.30, -0.85, 0.85);
       this.bank += (targetBank - this.bank) * Math.min(1, dt * 3.5);
     } else {
-      const rest = this.gate ? this.gate.angle + Math.PI / 2 : this.heading;
-      this.heading += angleDelta(this.heading, rest) * Math.min(1, dt * 2);
+      this.heading += angleDelta(this.heading, this.restHeading) * Math.min(1, dt * 2);
       this.bank += (0 - this.bank) * Math.min(1, dt * 3);
     }
 
@@ -2835,7 +2215,7 @@ class Butterfly {
 
     // altitude reads as scale: higher flights sit smaller against the garden
     const altitude = clamp((this.position.z - ALT.ground) / (ALT.cruise - ALT.ground), 0, 1);
-    this.mesh.scale.setScalar(0.48 * (1 - altitude * 0.22));
+    this.mesh.scale.setScalar(0.48 * BUTTERFLY_SCALE * (1 - altitude * 0.22));
 
     this.mesh.rotation.z = this.heading - Math.PI / 2;
     this.mesh.rotation.y = this.bank;
@@ -2899,7 +2279,9 @@ class Butterfly {
   /* ---------------- teardown ---------------- */
 
   dispose() {
-    this.releaseGate();
+    releaseLandingSpot(this.terminal, this.landingIndex);
+    this.landingIndex = null;
+
     scene.remove(this.mesh);
 
     this.leftMat.dispose();
@@ -2918,10 +2300,8 @@ class Butterfly {
   get statusLabel() { return STATUS_LABEL[this.state] ?? "—"; }
   get zoneLabel() { return ZONE_LABEL[this.state] ?? "—"; }
 
-  get gateLabel() {
-    if (this.gate) return this.gate.id;
-    if (this.state === "climb" || this.state === "gone") return "Released";
-    return "—";
+  get terminalLabel() {
+    return this.terminal === "T1" ? "Terminal 1" : "Terminal 2";
   }
 
   get altitudeLabel() {
@@ -2933,8 +2313,9 @@ class Butterfly {
 
 /* =================================================================
    16 · SIMULATION
-   Gate-driven: a flight only launches an approach when a stand is
-   reserved for it, so the metaphor never contradicts itself.
+   No gates to reserve: a flight simply appears at the edge, flies in,
+   lands at a random spot on its terminal flower, sits a while, then
+   the same butterfly flies back out again as a departure.
    ================================================================= */
 
 const sim = {
@@ -2944,31 +2325,27 @@ const sim = {
   arrivalTimer: 0
 };
 
-const inAirCount = () =>
-  butterflies.filter((b) => b.state === "inbound" || b.state === "holding" || b.state === "final").length;
+/** Total flights visible at once — the closest thing left to a gate count. */
+const MAX_BUTTERFLIES = 14;
 
-/**
- * `forceHold` must stay undefined when unspecified — Butterfly#enterInbound
- * falls back to a random 35% hold via `??`, and a `= false` default would
- * swallow that, so no organic arrival would ever enter the stack.
- */
-function spawnArrival(forceHold) {
-  if (!freeGates().length || inAirCount() >= sim.maxInAir) return null;
+const inAirCount = () => butterflies.filter((b) => b.state === "inbound").length;
 
-  // Pick the flight before the gate so it lands on the correct pier —
-  // domestic sectors taxi to the T1 petals, everything else to T2.
+function spawnArrival() {
+  if (butterflies.length >= MAX_BUTTERFLIES || inAirCount() >= sim.maxInAir) return null;
+
+  // domestic sectors land at T1, everything else at T2
   const flight = makeFlight("arrival", sim.code);
-  const gate = pick(freeGatesFor(flight));
-  const b = new Butterfly(flight, gate, { forceHold });
+  const terminal = routeTerminal(flight);
+  const b = new Butterfly(flight, terminal);
 
-  gate.reserved = b;
   butterflies.push(b);
   return b;
 }
 
-function spawnParked(gate) {
-  const flight = makeFlight("arrival", sim.code, undefined, gate.terminal);
-  const b = new Butterfly(flight, gate, { spawnParked: true });
+function spawnParked() {
+  const flight = makeFlight("arrival", sim.code);
+  const terminal = routeTerminal(flight);
+  const b = new Butterfly(flight, terminal, { spawnParked: true });
   butterflies.push(b);
   return b;
 }
@@ -3000,10 +2377,9 @@ function updateSimulation(dt) {
 
 /** Drop a flight straight into a climb-out, already partway up its trail. */
 function seedDeparture() {
-  const free = freeGates();
-  if (!free.length) return;
-
-  const b = new Butterfly(makeFlight("arrival", sim.code), pick(free), { spawnParked: true });
+  const flight = makeFlight("arrival", sim.code);
+  const terminal = routeTerminal(flight);
+  const b = new Butterfly(flight, terminal, { spawnParked: true });
   butterflies.push(b);
 
   b.enterBoarding();
@@ -3020,26 +2396,22 @@ function seedAirport(code) {
   sim.maxInAir = 4 + Math.round(sim.intensity * 4);
   sim.arrivalTimer = 1.4;
 
-  // occupy roughly half the gates so the terminal never looks abandoned
-  const seedGates = [...gates].sort(() => Math.random() - 0.5).slice(0, Math.ceil(GATE_COUNT * 0.5));
-  const parked = seedGates.map(spawnParked);
+  // a handful already parked so the terminal never looks abandoned
+  const INITIAL_PARKED = 5;
+  const parked = Array.from({ length: INITIAL_PARKED }, spawnParked);
 
-  // The whole metaphor — arrive, hold, park, board, depart — has to be legible
-  // in the first three seconds, so every state is on screen from frame one.
+  // The whole metaphor — arrive, land, sit, board, depart — has to be
+  // legible in the first three seconds, so every state is on screen
+  // from frame one.
   parked[0].dwellTimer = rand(1.8, 3.0);   // will start boarding almost at once
   seedDeparture();
-  spawnArrival(true);                      // one already in the stack
-  spawnArrival(false);
+  spawnArrival();
+  spawnArrival();
 }
 
 function clearAirport() {
   for (const b of butterflies) b.dispose();
   butterflies.length = 0;
-
-  for (const gate of gates) {
-    gate.occupant = null;
-    gate.reserved = null;
-  }
 
   setHovered(null);
   setPinned(null);
@@ -3069,7 +2441,7 @@ const ui = {
   dAirline: document.getElementById("dAirline"),
   dStatus: document.getElementById("dStatus"),
   dRoute: document.getElementById("dRoute"),
-  dGate: document.getElementById("dGate"),
+  dTerminal: document.getElementById("dGate"),
   dZone: document.getElementById("dZone"),
   dAlt: document.getElementById("dAlt"),
 
@@ -3118,7 +2490,7 @@ function updateHUD(dt) {
   const perAirline = new Map();
 
   for (const b of butterflies) {
-    if (b.state === "inbound" || b.state === "holding" || b.state === "final") arrivals++;
+    if (b.state === "inbound") arrivals++;
     else if (b.state === "boarding" || b.state === "climb") departures++;
     else if (b.state === "parked") parked++;
 
@@ -3127,7 +2499,7 @@ function updateHUD(dt) {
 
   ui.arrivals.textContent = arrivals;
   ui.departures.textContent = departures;
-  ui.parked.textContent = `${parked}/${GATE_COUNT}`;
+  ui.parked.textContent = parked;
   ui.active.textContent = butterflies.length;
 
   for (const [code, row] of airlineRows) {
@@ -3160,7 +2532,7 @@ function renderDetail(b) {
   ui.dStatus.dataset.state = b.state;
 
   ui.dRoute.textContent = routeText(b.flight);
-  ui.dGate.textContent = b.gateLabel;
+  ui.dTerminal.textContent = b.terminalLabel;
   ui.dZone.textContent = b.zoneLabel;
   ui.dAlt.textContent = b.altitudeLabel;
 }
@@ -3179,11 +2551,11 @@ let pinned = null;
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
-/** e.g. "AI 204 · Arriving · Gate C3" */
+/** e.g. "AI 204 · Arriving · Terminal 2" */
 function writeTooltip(b) {
   ui.tooltip.innerHTML =
     `<span class="tt-accent">${b.flight.id}</span> · ${b.statusLabel}` +
-    (b.gate ? ` · Gate ${b.gate.id}` : "");
+    ` · ${b.terminalLabel}`;
 }
 
 function setHovered(b) {
@@ -3422,16 +2794,17 @@ function initHUDToggle() {
 
   const toggleBtn = document.createElement("button");
   toggleBtn.type = "button";
-  toggleBtn.className = "hud-toggle-btn";
+  toggleBtn.className = "hud-toggle-btn hud-active-btn";
 
   const label = document.createElement("span");
-  label.textContent = "SHOW UI";
+  label.textContent = "HIDE UI";
   toggleBtn.appendChild(label);
 
   document.body.appendChild(toggleBtn);
 
   const toggleHUD = () => {
     const isActive = hud.classList.toggle("hud-active");
+    document.body.classList.toggle("hud-active", isActive);
     toggleBtn.classList.toggle("hud-active-btn", isActive);
     label.textContent = isActive ? "HIDE UI" : "SHOW UI";
   };
@@ -3470,26 +2843,16 @@ function animate() {
   updateIntro();
   updateParallax(dt, elapsed);
   updateSimulation(dt);
-
-  // Gate auras must settle before the garden samples them, or the foliage
-  // lights one frame behind the ring markers sitting on top of it.
-  updateGates(dt, elapsed, master);
-  updateGatePulses(dt, master);
+  updatePulses(dt, master);
 
   const activity = clamp(butterflies.length / 14, 0, 1);
   livingGarden?.update(elapsed, master, activity);
+  updateTerminalFlowers(dt, elapsed);
 
   updateMotes(elapsed, master);
+  updateGrassDust(elapsed, master);
   updateSparkles(dt, master);
   updateLabels();
-
-  for (const p of routePulses) p.update(dt, master);
-  for (const r of runwayLights) r.update(elapsed, master);
-  for (const line of routeLines) line.material.opacity = master;
-  for (const ring of holdingRings) {
-    ring.rotation.z += ring.userData.spin * dt;
-    ring.material.opacity = master * 0.9;
-  }
 
   updateHUD(dt);
   render();

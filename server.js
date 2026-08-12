@@ -4,6 +4,59 @@ const path = require('path');
 
 const PORT = 8080;
 
+/** Minimal .env loader — no dotenv dependency for a project with none installed. */
+function loadEnv(file) {
+  const env = {};
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return env;
+  }
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    env[key] = value;
+  }
+  return env;
+}
+
+const env = loadEnv(path.join(__dirname, '.env'));
+
+/**
+ * Server-side proxy for the garden video's wind-speed control (see
+ * WIND_API in main.js). The WeatherAPI.com key lives only in .env / this
+ * process's env — it never reaches the browser, unlike calling the API
+ * directly from client JS.
+ */
+async function handleWindRequest(res) {
+  const key = process.env.WEATHERAPI_KEY || env.WEATHERAPI_KEY;
+  if (!key) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'WEATHERAPI_KEY not configured' }));
+    return;
+  }
+
+  try {
+    const url = `https://api.weatherapi.com/v1/current.json?key=${key}&q=Bengaluru&_=${Date.now()}`;
+    const apiRes = await fetch(url);
+    if (!apiRes.ok) throw new Error(`weatherapi → HTTP ${apiRes.status}`);
+    const data = await apiRes.json();
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ kph: data.current.wind_kph }));
+  } catch (err) {
+    res.writeHead(502, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: String(err) }));
+  }
+}
+
 const MIME_TYPES = {
   '.html': 'text/html',
   '.css': 'text/css',
@@ -19,6 +72,11 @@ const MIME_TYPES = {
 
 const server = http.createServer((req, res) => {
   console.log(`${req.method} ${req.url}`);
+
+  if (req.url.split('?')[0] === '/api/wind') {
+    handleWindRequest(res);
+    return;
+  }
 
   // Normalize URL path to prevent directory traversal
   let filePath = req.url.split('?')[0];

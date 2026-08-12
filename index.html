@@ -19,7 +19,7 @@
   </script>
 </head>
 
-<body>
+<body class="hud-active">
 
   <!-- ============================================================
        STAGE : the visualization is the first and only screen
@@ -33,7 +33,7 @@
   <!-- ============================================================
        HUD : glass control-tower overlay
   ============================================================ -->
-  <main class="hud">
+  <main class="hud hud-active">
 
     <!-- Tower / airport selector -->
     <section class="panel tower" id="towerPanel">
@@ -61,7 +61,7 @@
       </div>
       <div class="stat" data-kind="parked">
         <span class="stat-value" id="statParked">0</span>
-        <span class="stat-label">At Gates</span>
+        <span class="stat-label">Landed</span>
       </div>
       <div class="stat" data-kind="active">
         <span class="stat-value" id="statActive">0</span>
@@ -71,14 +71,7 @@
 
     <!-- Legend -->
     <section class="panel legend" id="legendPanel">
-      <h2 class="eyebrow">Airspace Key</h2>
-      <ul class="route-key">
-        <li><i class="line cyan"></i><span>Arrival corridor</span></li>
-        <li><i class="line amber"></i><span>Departure trail</span></li>
-        <li><i class="line white dashed"></i><span>Holding pattern</span></li>
-      </ul>
-
-      <h2 class="eyebrow airline-head">Carriers in Garden</h2>
+      <h2 class="eyebrow">Carriers in Garden</h2>
       <ul class="airline-key" id="airlineKey"></ul>
     </section>
 
@@ -105,7 +98,7 @@
 
         <dl class="detail-grid">
           <div><dt>Route</dt><dd id="dRoute">—</dd></div>
-          <div><dt>Gate</dt><dd id="dGate">—</dd></div>
+          <div><dt>Terminal</dt><dd id="dGate">—</dd></div>
           <div><dt>Zone</dt><dd id="dZone">—</dd></div>
           <div><dt>Altitude</dt><dd id="dAlt">—</dd></div>
         </dl>
@@ -122,7 +115,7 @@
   <div class="titlecard" id="titlecard">
     <span class="tc-kicker">Flight Garden</span>
     <span class="tc-line">An airport, rendered as a living garden</span>
-    <span class="tc-sub">Butterflies are flights · Flowers are gates</span>
+    <span class="tc-sub">Butterflies are flights · Flowers are terminals</span>
   </div>
 
   <script type="module" src="main.js"></script>
