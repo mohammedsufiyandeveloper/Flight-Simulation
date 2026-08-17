@@ -987,13 +987,23 @@ loadGardenVideoTexture("assets/playbalst675464564646.mp4")
     resize();
   })
   .catch(async (err) => {
-    console.warn("[Flight Garden] playbalst31123.mp4 unavailable, falling back to garden.png.", err);
+    console.warn("[Flight Garden] Local playbalst675464564646.mp4 unavailable, trying remote LFS URL...", err);
     try {
-      const texture = await loadGardenTexture("assets/garden.png");
-      livingGarden = new LivingGarden(texture);
+      const remoteUrl = "https://media.githubusercontent.com/media/mohammedsufiyandeveloper/Flight-Simulation/main/assets/playbalst675464564646.mp4";
+      const { texture, video, mediaAspect, mediaResolution } = await loadGardenVideoTexture(remoteUrl);
+      livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
+      gardenVideoEl = video;
+      startWindDrivenVideoSpeed();
       resize();
-    } catch (pngErr) {
-      console.warn("[Flight Garden] Garden fallback texture unavailable — scene will render without a garden layer.", pngErr);
+    } catch (remoteErr) {
+      console.warn("[Flight Garden] Remote playbalst675464564646.mp4 also unavailable, falling back to garden.png.", remoteErr);
+      try {
+        const texture = await loadGardenTexture("assets/garden.png");
+        livingGarden = new LivingGarden(texture);
+        resize();
+      } catch (pngErr) {
+        console.warn("[Flight Garden] Garden fallback texture unavailable — scene will render without a garden layer.", pngErr);
+      }
     }
   })
   .finally(() => {

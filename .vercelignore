@@ -1,0 +1,10 @@
+# Ignore Git-ignored patterns
+.agents/
+.codex/
+.DS_Store
+Thumbs.db
+.vercel
+.env*
+
+# Ignore the large video file (we load it via GitHub LFS CDN in production)
+assets/playbalst675464564646.mp4
