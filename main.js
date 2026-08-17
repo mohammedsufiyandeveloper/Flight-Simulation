@@ -697,9 +697,14 @@ async function loadGardenVideoTexture(url) {
   // real end, while still mid-playback, so the same cheap seek-to-keyframe-0
   // happens without the end-of-media overhead. video.loop stays on as a
   // fallback in case this never quite reaches the threshold on a given frame.
-  const LOOP_LEAD = 0.08; // seconds of lead time before the true end
+  // Scaled by playbackRate: the wind-speed control can run this up to 2x
+  // (see WIND_API.maxRate below), which widens the video-time gap between
+  // successive frame callbacks. A fixed lead can get skipped past at higher
+  // rates, falling through to the hitchy native video.loop restart above.
+  const LOOP_LEAD_BASE = 0.08; // seconds of lead time before the true end, at 1x
   const loopBack = () => {
-    if (video.duration && video.currentTime >= video.duration - LOOP_LEAD) {
+    const lead = LOOP_LEAD_BASE * Math.max(video.playbackRate, 1);
+    if (video.duration && video.currentTime >= video.duration - lead) {
       video.currentTime = 0;
     }
   };
@@ -974,7 +979,7 @@ function loadTerminalFlowers() {
     });
 }
 
-loadGardenVideoTexture("assets/playbalst6546456.mp4")
+loadGardenVideoTexture("assets/playbalst675464564646.mp4")
   .then(({ texture, video, mediaAspect, mediaResolution }) => {
     livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
     gardenVideoEl = video;
