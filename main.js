@@ -659,6 +659,7 @@ async function loadGardenTexture(url) {
  */
 async function loadGardenVideoTexture(url) {
   const video = document.createElement("video");
+  video.crossOrigin = "anonymous";
   video.src = url;
   video.loop = true;
   video.muted = true;
