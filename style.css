@@ -5,18 +5,22 @@
 :root {
   --bg: #05070a;
 
-  --glass: rgba(10, 16, 22, 0.58);
-  --glass-hi: rgba(255, 255, 255, 0.055);
-  --stroke: rgba(255, 255, 255, 0.10);
-  --stroke-soft: rgba(255, 255, 255, 0.055);
+  --glass: rgba(255, 255, 255, 0.1);
+  --glass-hi: rgba(255, 255, 255, 0.85);
+  --stroke: rgba(15, 23, 32, 0.12);
+  --stroke-soft: rgba(15, 23, 32, 0.07);
 
-  --text: #e9eff3;
-  --muted: rgba(233, 239, 243, 0.52);
-  --faint: rgba(233, 239, 243, 0.30);
+  --text: #141a21;
+  --muted: rgba(20, 26, 33, 0.58);
+  --faint: rgba(20, 26, 33, 0.40);
 
   --cyan: #62dcff;
   --amber: #ffc46b;
   --soft-white: rgba(255, 255, 255, 0.82);
+
+  --cyan-panel: #0b7594;
+  --amber-panel: #a3620f;
+  --mint-panel: #1f7a4d;
 
   --radius: 16px;
   --radius-sm: 10px;
@@ -25,7 +29,7 @@
     0 2px 10px -2px rgba(0, 0, 0, 0.6);
 
   --pad: 16px;
-  --blur: blur(22px) saturate(140%);
+  --blur: blur(26px) saturate(150%) brightness(1.05);
 
   --font: "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -34,9 +38,7 @@
 
   /* HUD layout variables for desktop */
   --hud-padding: clamp(14px, 2.2vw, 28px);
-  --hud-gap: 20px;
-  --left-col-width: clamp(220px, 18vw, 280px);
-  --right-col-width: clamp(240px, 20vw, 300px);
+  --panel-width: clamp(180px, 13vw, 220px);
 }
 
 * {
@@ -223,22 +225,15 @@ body {
   position: fixed;
   inset: 0;
   padding: var(--hud-padding);
-  display: grid;
-  grid-template-columns: var(--left-col-width) 1fr var(--right-col-width);
-  grid-template-rows: auto 1fr;
-  grid-template-areas:
-    "tower  .  stats"
-    "legend .  detail";
-  gap: var(--hud-gap);
   pointer-events: none;
 }
 
 .panel {
+  position: relative;
   pointer-events: auto;
   background: var(--glass);
   border: 1px solid var(--stroke);
   border-radius: var(--radius);
-  padding: var(--pad);
   box-shadow: var(--shadow);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
@@ -246,7 +241,7 @@ body {
   /* cinematic entrance */
   opacity: 0;
   transform: translateY(10px);
-  animation: panel-in 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: panel-in 0.9s cubic-bezier(0.16, 1, 0.3, 1) 1.9s forwards;
 }
 
 /* Hairline of light along the top edge — the "glass art" tell */
@@ -261,10 +256,6 @@ body {
       rgba(255, 255, 255, 0) 38%);
 }
 
-.panel {
-  position: relative;
-}
-
 @keyframes panel-in {
   to {
     opacity: 1;
@@ -272,28 +263,25 @@ body {
   }
 }
 
-.tower {
-  grid-area: tower;
-  animation-delay: 1.9s;
-  width: 100%;
+/* Single sidebar card holding every HUD section */
+.hud-panel {
+  position: fixed;
+  left: var(--hud-padding);
+  top: var(--hud-padding);
+  bottom: var(--hud-padding);
+  width: var(--panel-width);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-.stats {
-  grid-area: stats;
-  animation-delay: 2.1s;
-  width: 100%;
+.hp-block {
+  padding: var(--pad);
 }
 
-.legend {
-  grid-area: legend;
-  animation-delay: 2.3s;
-  width: 100%;
-}
-
-.detail {
-  grid-area: detail;
-  animation-delay: 2.3s;
-  width: 100%;
+.hp-block+.hp-block {
+  border-top: 1px solid var(--stroke-soft);
 }
 
 .eyebrow {
@@ -383,7 +371,7 @@ body {
   font-size: 12px;
   letter-spacing: 0.04em;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(15, 23, 32, 0.05);
   border: 1px solid var(--stroke);
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -391,17 +379,17 @@ body {
 }
 
 #airportSelect:hover {
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: rgba(15, 23, 32, 0.24);
 }
 
 #airportSelect:focus-visible {
   outline: none;
-  border-color: var(--cyan);
-  box-shadow: 0 0 0 3px rgba(98, 220, 255, 0.14);
+  border-color: var(--cyan-panel);
+  box-shadow: 0 0 0 3px rgba(11, 117, 148, 0.16);
 }
 
 #airportSelect option {
-  background: #0a1016;
+  background: #f5f6f8;
   color: var(--text);
 }
 
@@ -411,7 +399,7 @@ body {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(56px, auto));
+  grid-template-columns: 1fr 1fr;
   gap: 0;
 }
 
@@ -420,17 +408,23 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 5px;
-  padding: 2px 14px;
-  border-left: 1px solid var(--stroke-soft);
+  padding: 4px 8px;
 }
 
-.stat:first-child {
-  border-left: 0;
-  padding-left: 4px;
+.stat:nth-child(1),
+.stat:nth-child(2) {
+  padding-top: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--stroke-soft);
 }
 
-.stat:last-child {
-  padding-right: 4px;
+.stat:nth-child(3),
+.stat:nth-child(4) {
+  padding-bottom: 0;
+}
+
+.stat:nth-child(odd) {
+  border-right: 1px solid var(--stroke-soft);
 }
 
 .stat-value {
@@ -443,15 +437,15 @@ body {
 }
 
 .stat[data-kind="arrival"] .stat-value {
-  color: var(--cyan);
+  color: var(--cyan-panel);
 }
 
 .stat[data-kind="departure"] .stat-value {
-  color: var(--amber);
+  color: var(--amber-panel);
 }
 
 .stat[data-kind="parked"] .stat-value {
-  color: #9fe6b8;
+  color: var(--mint-panel);
 }
 
 .stat[data-kind="active"] .stat-value {
@@ -469,10 +463,6 @@ body {
 /* =============================================================
    LEGEND PANEL
    ============================================================= */
-
-.legend {
-  width: 100%;
-}
 
 .route-key,
 .airline-key {
@@ -586,7 +576,7 @@ body {
 
 .unpin:hover {
   color: var(--text);
-  border-color: rgba(255, 255, 255, 0.28);
+  border-color: rgba(15, 23, 32, 0.26);
 }
 
 .detail-empty {
@@ -654,20 +644,20 @@ body {
 
 .status-chip[data-state="inbound"],
 .status-chip[data-state="final"] {
-  color: var(--cyan);
+  color: var(--cyan-panel);
 }
 
 .status-chip[data-state="holding"] {
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--text);
 }
 
 .status-chip[data-state="parked"] {
-  color: #9fe6b8;
+  color: var(--mint-panel);
 }
 
 .status-chip[data-state="boarding"],
 .status-chip[data-state="climb"] {
-  color: var(--amber);
+  color: var(--amber-panel);
 }
 
 .detail-grid {
@@ -843,12 +833,8 @@ body {
    ============================================================= */
 
 @media (max-width: 900px) {
-  .legend {
-    width: min(200px, 54vw);
-  }
-
-  .detail {
-    width: min(260px, 60vw);
+  :root {
+    --panel-width: 170px;
   }
 
   .stat {
@@ -867,37 +853,25 @@ body {
   }
 
   .hud {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr auto;
-    grid-template-areas:
-      "tower"
-      "stats"
-      "."
-      "detail";
-    gap: 10px;
     padding: 12px;
-    padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
 
-  .tower {
-    width: calc(100% - 136px);
-  }
-
-  .detail {
-    width: 100%;
+  /* Sidebar becomes a top bar, leaving room for the HUD toggle pill */
+  .hud-panel {
+    left: 12px;
+    right: 148px;
+    top: 12px;
+    bottom: auto;
+    width: auto;
+    max-height: 70vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
 
   /* Airline roster is the first thing to go — the garden must breathe */
   .legend {
     display: none;
-  }
-
-  .stats {
-    grid-template-columns: repeat(4, 1fr);
-  }
-
-  .stat {
-    padding: 2px 4px;
   }
 
   .stat-value {
@@ -951,8 +925,8 @@ body {
 
 /*
  * Dedicated 195 × 390 portrait display.
- * The garden remains a centred landscape diorama while controls occupy the
- * otherwise-unused black space above and below it.
+ * The garden remains a centred landscape diorama while the single control
+ * card shrinks to a compact top bar showing just Tower + Stats.
  */
 @media (max-width: 240px) and (max-height: 460px) and (orientation: portrait) {
   :root {
@@ -961,20 +935,15 @@ body {
     --radius-sm: 6px;
   }
 
-
-
   .hud {
-    display: block;
     padding: 0;
   }
 
-  .tower {
-    position: fixed;
+  .hud-panel {
     top: max(5px, env(safe-area-inset-top));
     left: 5px;
     right: 5px;
-    width: auto;
-    padding: 7px;
+    max-height: none;
     border-radius: 9px;
   }
 
@@ -1016,22 +985,33 @@ body {
   }
 
   .stats {
-    position: fixed;
-    right: 5px;
-    bottom: max(5px, env(safe-area-inset-bottom));
-    left: 5px;
-    width: auto;
     padding: 6px 4px;
-    border-radius: 9px;
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .stat,
-  .stat:first-child,
-  .stat:last-child {
+  .stat {
     min-width: 0;
     gap: 2px;
     padding: 0 2px;
+  }
+
+  /* Single row here, not the 2×2 quad — reset the quad's dividers
+     and use a plain left-rule between every column instead. */
+  .stat:nth-child(1),
+  .stat:nth-child(2),
+  .stat:nth-child(3),
+  .stat:nth-child(4) {
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  .stat:nth-child(odd) {
+    border-right: none;
+  }
+
+  .stat:not(:first-child) {
+    border-left: 1px solid var(--stroke-soft);
   }
 
   .stat-value {
@@ -1107,29 +1087,17 @@ body {
   pointer-events: none !important;
 }
 
-/* Slide columns out on desktop layout */
+/* Slide the sidebar off-screen to the left on desktop layout */
 @media (min-width: 721px) {
-  .hud:not(.hud-active) .tower,
-  .hud:not(.hud-active) .legend {
+  .hud:not(.hud-active) .hud-panel {
     transform: translateX(-115%) !important;
-  }
-  .hud:not(.hud-active) .stats,
-  .hud:not(.hud-active) .detail {
-    transform: translateX(115%) !important;
-  }
-  .stats {
-    margin-top: calc(32px + var(--hud-gap));
   }
 }
 
-/* Slide top/bottom out on mobile layout */
+/* Slide the top bar up on mobile layout */
 @media (max-width: 720px) {
-  .hud:not(.hud-active) .tower,
-  .hud:not(.hud-active) .stats {
+  .hud:not(.hud-active) .hud-panel {
     transform: translateY(-115%) !important;
-  }
-  .hud:not(.hud-active) .detail {
-    transform: translateY(115%) !important;
   }
 }
 
@@ -1146,7 +1114,7 @@ body {
   box-shadow: var(--shadow);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--text);
   font-family: inherit;
   font-size: 10.5px;
   font-weight: 600;
@@ -1168,27 +1136,29 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #ff4a4a; /* red when closed */
+  background: #ff4a4a;
+  /* red when closed */
   box-shadow: 0 0 6px #ff4a4a;
   transition: background-color 0.3s, box-shadow 0.3s;
 }
 
 .hud-toggle-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(15, 23, 32, 0.08);
+  border-color: rgba(15, 23, 32, 0.28);
   transform: scale(1.05);
 }
 
 /* Open State */
 .hud-active-btn {
-  border-color: #38bdf8;
-  color: #38bdf8;
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.15);
+  border-color: #0f7fb0;
+  color: #0f7fb0;
+  box-shadow: 0 0 12px rgba(15, 127, 176, 0.18);
 }
 
 .hud-active-btn::before {
-  background: #38bdf8; /* glowing cyan when open */
-  box-shadow: 0 0 8px #38bdf8;
+  background: #0f7fb0;
+  /* glowing blue when open */
+  box-shadow: 0 0 8px #0f7fb0;
 }
 
 /* Hide HUD layers when UI is inactive */
