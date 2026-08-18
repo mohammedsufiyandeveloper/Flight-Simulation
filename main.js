@@ -351,7 +351,13 @@ const WING_FRAG = /* glsl */`
     float r = length(uv * SCALE);
     float t = atan(uv.y, uv.x);
     float d = wingField(r, t);
-    if (d < 0.0) discard;
+
+    // Anti-aliased silhouette edge — a hard discard leaves visible jaggies
+    // at the small size these render on screen; a soft band keyed to the
+    // local gradient keeps the outline crisp instead.
+    float aa = fwidth(d) * 1.5 + 0.001;
+    if (d < -aa * 4.0) discard;
+    float edgeMask = smoothstep(-aa, aa, d);
 
     // A tight rim: the pale edge must hug the silhouette, otherwise it floods
     // the whole wing and bloom turns every butterfly into a white smudge.
@@ -369,8 +375,8 @@ const WING_FRAG = /* glsl */`
     // inner glow — the light source lives at the thorax; a warm gold core
     // sits under the electric cyan so the wing reads as lit from within,
     // closer to a firefly than a neon sign.
-    color += CYAN * 0.42 * pow(1.0 - radial, 3.0);
-    color += GOLD * 0.38 * pow(1.0 - radial, 5.0);
+    color += CYAN * 0.54 * pow(1.0 - radial, 3.0);
+    color += GOLD * 0.48 * pow(1.0 - radial, 5.0);
 
     // radiating veins, darkened glass between the ribs
     float vein = smoothstep(0.86, 1.0, abs(sin(t * 7.0 + 0.4)));
@@ -397,17 +403,17 @@ const WING_FRAG = /* glsl */`
     color += vec3(1.0, 0.88, 0.55) * star2 * twinkle2 * pow(rim, 1.3) * 1.5;
 
     // bright rim light hugging the silhouette, warmed with gold
-    color += mix(mix(CYAN, GOLD, 0.5), vec3(1.0), 0.4) * pow(rim, 1.6) * 1.05;
+    color += mix(mix(CYAN, GOLD, 0.5), vec3(1.0), 0.4) * pow(rim, 1.5) * 1.5;
 
-    // slow iridescent shimmer
+    // slow iridescent shimmer — a touch richer than before
     float sh = uTime * 0.9 + radial * 5.0 + uSeed * 6.0;
-    color += 0.055 * vec3(sin(sh), sin(sh + 2.1), sin(sh + 4.2));
+    color += 0.08 * vec3(sin(sh), sin(sh + 2.1), sin(sh + 4.2));
 
     // pre-departure warm-up
     color += uHighlight * vec3(1.0, 0.72, 0.32) * 0.62;
 
     // glass: translucent through the middle, solid along the rim
-    float alpha = uOpacity * smoothstep(0.0, 0.35, d) * (0.66 + 0.34 * pow(rim, 1.2));
+    float alpha = uOpacity * edgeMask * (0.66 + 0.34 * pow(rim, 1.2));
     gl_FragColor = vec4(color, alpha);
   }
 `;
@@ -2276,9 +2282,9 @@ class Butterfly {
     this.bodyMat.opacity = o;
 
     const selected = this === pinned || this === hovered;
-    const base = this.state === "boarding" ? 0.24 + this.highlight * 0.30 : 0.16;
+    const base = this.state === "boarding" ? 0.32 + this.highlight * 0.30 : 0.26;
     this.glowMat.opacity = (base + (selected ? 0.30 : 0)) * o;
-    this.glow.scale.setScalar(0.42 + this.highlight * 0.16 + (selected ? 0.14 : 0));
+    this.glow.scale.setScalar(0.54 + this.highlight * 0.16 + (selected ? 0.14 : 0));
 
     this.glowMat.color.copy(this.airline.threeColor);
     if (this.highlight > 0.01) {
@@ -2288,8 +2294,8 @@ class Butterfly {
     // warm core glow: a slow, per-flight breath so a field of parked
     // butterflies never pulses in lockstep
     const breathe = 0.82 + 0.18 * Math.sin(elapsed * 2.4 + this.seed * 12.0);
-    this.coreGlowMat.opacity = (0.55 + this.highlight * 0.25) * breathe * o;
-    this.coreGlow.scale.setScalar(0.14 + this.highlight * 0.05);
+    this.coreGlowMat.opacity = (0.68 + this.highlight * 0.25) * breathe * o;
+    this.coreGlow.scale.setScalar(0.19 + this.highlight * 0.05);
   }
 
   /* ---------------- teardown ---------------- */
