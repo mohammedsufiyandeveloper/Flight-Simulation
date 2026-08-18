@@ -980,7 +980,7 @@ function loadTerminalFlowers() {
     });
 }
 
-loadGardenVideoTexture("assets/playbalst675464564646.mp4")
+loadGardenVideoTexture("assets/playbalst35345346.mp4")
   .then(({ texture, video, mediaAspect, mediaResolution }) => {
     livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
     gardenVideoEl = video;
