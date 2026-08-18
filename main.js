@@ -745,8 +745,8 @@ async function loadGardenVideoTexture(url) {
  * Ties the garden video's playback speed to Bengaluru's live wind. wind_kph
  * is mapped to a 0..1 "speed" value across [minKph, maxKph], then that 0..1
  * is mapped onto the video's playbackRate range (minRate/maxRate — currently
- * 1..2, so calm wind still plays at normal 1x and gusty wind plays at 2x,
- * rather than ever slowing down or pausing).
+ * 0.8..1.2, so calm wind plays slightly slower than normal and gusty wind
+ * plays slightly faster, staying close to 1x either way).
  *
  * The actual WeatherAPI.com call happens server-side (see /api/wind in
  * server.js), which reads the key from .env — it never ships to the
@@ -755,8 +755,8 @@ async function loadGardenVideoTexture(url) {
 const WIND_API = {
   minKph: 18,
   maxKph: 38,
-  minRate: 1,
-  maxRate: 2,
+  minRate: 0.8,
+  maxRate: 1.2,
   pollMs: 5 * 60 * 1000 // real-time-enough without hammering the free-tier rate limit
 };
 
