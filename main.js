@@ -315,51 +315,29 @@ const WING_FRAG = /* glsl */`
   uniform float uSide;        // -1 = left half, +1 = right half
   uniform vec3  uColor;       // airline livery
   uniform float uHighlight;   // 0..1 pre-departure brightening
-  uniform float uSeed;        // per-flight noise + shimmer offset
-  uniform float uTint;        // how much livery survives the painted base
+  uniform float uSeed;        // per-flight speckle + shimmer offset
+  uniform float uTint;        // how much livery survives the luminous base
 
   varying vec2 vUv;
 
   const float SCALE = 22.8;
 
-  const vec3 INK  = vec3(0.05, 0.05, 0.09);   // border ink, near-black
-  const vec3 CREAM= vec3(0.99, 0.95, 0.82);   // pale ground between patches
+  // The luminous palette. Every butterfly is glass lit from within; the airline
+  // colour is a tint through that glass, never a replacement for it.
+  const vec3 DEEP = vec3(0.05, 0.16, 0.72);   // sapphire, wing edges
+  const vec3 CYAN = vec3(0.22, 0.80, 1.00);   // electric core, near the body
   const vec3 GOLD = vec3(1.00, 0.80, 0.38);   // warm fairy-light at the thorax
 
-  // Two-lobe silhouette: a broad, pointed forewing swept up-and-out, and a
-  // smaller, rounder hindwing tucked below it, unioned as independent polar
-  // lobes so a real notch appears between them.
-  float lobe(float t, float a, float R, float p){
-    return R * pow(max(cos(t - a), 0.0), p);
+  // Polar silhouette of a butterfly wing pair.
+  float wingField(float r, float t){
+    return 7.2 - 0.5*sin(t) + 2.5*sin(3.0*t) + 2.0*sin(5.0*t) - 1.7*sin(7.0*t)
+         + 3.0*cos(2.0*t) - 2.0*cos(4.0*t) - 0.4*cos(16.0*t) - r;
   }
 
   float hash21(vec2 p){
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
-  }
-
-  // Bilinear value noise off hash21 — smooth, cheap, no LUTs.
-  float vnoise(vec2 p){
-    vec2 i = floor(p), f = fract(p);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-  }
-
-  // Fractal sum of vnoise — the mottled, hand-painted patchiness real wing
-  // scales have, rather than a flat colour or a mechanical grid of dots.
-  float fbm(vec2 p){
-    float t = 0.0, amp = 0.5;
-    for (int i = 0; i < 4; i++){
-      t += amp * vnoise(p);
-      p = p * 2.02 + 11.7;
-      amp *= 0.5;
-    }
-    return t;
   }
 
   void main(){
@@ -371,87 +349,65 @@ const WING_FRAG = /* glsl */`
     if (uSide > 0.0 && uv.x < 0.0) discard;
 
     float r = length(uv * SCALE);
-    // Mirror x for the left half so both lobes share one angle formula and
-    // come out as true mirror images rather than two independent shapes.
-    float t = atan(uv.y, uv.x * uSide);
+    float t = atan(uv.y, uv.x);
+    float d = wingField(r, t);
+    if (d < 0.0) discard;
 
-    float fore = lobe(t, radians(40.0), 9.8, 1.7);
-    float hind = lobe(t, radians(-46.0), 6.4, 2.6);
-    float tail = lobe(t, radians(-64.0), 8.2, 9.0);
-    float rw = max(max(fore, hind), tail);
-    float d = rw - r;
-    bool isFore = fore >= hind && fore >= tail;
+    // A tight rim: the pale edge must hug the silhouette, otherwise it floods
+    // the whole wing and bloom turns every butterfly into a white smudge.
+    float inside = smoothstep(0.0, 1.2, d);          // 0 at the rim
+    float rim    = 1.0 - inside;
+    float radial = clamp(r / 13.0, 0.0, 1.0);        // 0 at the body
 
-    // Anti-aliased silhouette edge — a hard discard leaves visible jaggies
-    // once the wing is only a few dozen pixels across, which is most of the
-    // time here; a soft band keyed to the local gradient keeps it crisp at
-    // any size instead.
-    float aa = fwidth(d) * 1.5 + 0.001;
-    if (d < -aa * 4.0) discard;
-    float edgeMask = smoothstep(-aa, aa, d);
+    // sapphire at the edges, electric cyan toward the body
+    vec3 color = mix(CYAN, DEEP, smoothstep(0.15, 0.95, radial));
 
-    float radial = clamp(r / rw, 0.0, 1.0);           // 0 at hinge, 1 at rim
+    // livery tint — dominant across the whole wing so each butterfly reads
+    // clearly as its own airline's colour, not just tinted at the edges
+    color = mix(color, uColor, uTint * (0.65 + 0.35 * radial));
 
-    // Painted ground: warm on the forewing, cool on the hindwing, mottled
-    // by low-frequency noise rather than a flat gradient.
-    vec2 np = uv * 3.4 + uSeed * 9.0;
-    float ground = fbm(np);
-    vec3 warmBase = mix(vec3(0.62, 0.10, 0.08), vec3(0.86, 0.42, 0.08), ground);
-    vec3 coolBase = mix(vec3(0.06, 0.14, 0.34), vec3(0.10, 0.34, 0.42), ground);
-    vec3 color = isFore ? warmBase : coolBase;
+    // inner glow — the light source lives at the thorax; a warm gold core
+    // sits under the electric cyan so the wing reads as lit from within,
+    // closer to a firefly than a neon sign.
+    color += CYAN * 0.42 * pow(1.0 - radial, 3.0);
+    color += GOLD * 0.38 * pow(1.0 - radial, 5.0);
 
-    // Livery colour patch — its own noise-bounded blotch (like real
-    // wing-scale colour patches), not a uniform tint over everything.
-    float blotch = fbm(np * 1.6 + 4.0);
-    float blotchMask = smoothstep(0.46, 0.58, blotch) * uTint;
-    color = mix(color, uColor * 1.15, blotchMask);
+    // radiating veins, darkened glass between the ribs
+    float vein = smoothstep(0.86, 1.0, abs(sin(t * 7.0 + 0.4)));
+    color = mix(color, color * 0.55 + CYAN * 0.10, vein * 0.30 * inside);
 
-    // Pale scattered scale-flecks, denser toward the rim.
-    float fleck = fbm(np * 2.6 + 8.0);
-    float fleckMask = smoothstep(0.62, 0.74, fleck) * smoothstep(0.15, 0.85, radial);
-    color = mix(color, CREAM, fleckMask * 0.85);
+    // star speckles, scattered and biased toward the wing edges — warm
+    // white/gold so they read as fairy dust rather than frost
+    vec2 grid  = uv * 26.0 + uSeed * 13.0;
+    vec2 cell  = floor(grid);
+    float h    = hash21(cell);
+    vec2 jitter = vec2(hash21(cell + 1.7), hash21(cell + 3.1)) - 0.5;
+    float star = smoothstep(0.17, 0.0, length(fract(grid) - 0.5 - jitter * 0.6))
+               * step(0.83, h);
+    float twinkle = 0.55 + 0.45 * sin(uTime * 2.6 + h * 30.0);
+    vec3 speckle = mix(vec3(1.0, 0.86, 0.55), vec3(1.0, 1.0, 1.0), h);
+    color += speckle * star * twinkle * smoothstep(0.25, 0.95, radial) * 1.4;
 
-    // Ink border: a dark band whose width wobbles with noise instead of
-    // tracing the silhouette at a fixed offset — the difference between a
-    // printed sticker and a hand-inked wing margin. Placed right at the
-    // rim, and applied last among the darkening passes so nothing paints
-    // over it.
-    float wobble = 0.55 + 0.45 * fbm(vec2(t * 2.4, r * 0.5) + uSeed * 5.0);
-    float borderBand = smoothstep(0.0, 0.55 * wobble, d) - smoothstep(0.55 * wobble, 1.15 * wobble, d);
+    // tiny shimmering dots hugging the wing border — small, fast, gold
+    vec2 grid2 = uv * 44.0 + uSeed * 27.0;
+    vec2 cell2 = floor(grid2);
+    float h2   = hash21(cell2 + 9.2);
+    float star2 = smoothstep(0.14, 0.0, length(fract(grid2) - 0.5)) * step(0.90, h2);
+    float twinkle2 = 0.5 + 0.5 * sin(uTime * 3.4 + h2 * 40.0);
+    color += vec3(1.0, 0.88, 0.55) * star2 * twinkle2 * pow(rim, 1.3) * 1.5;
 
-    // Thin ink veins fanning from the hinge.
-    float vein = smoothstep(0.90, 1.0, abs(sin(t * 9.0 + 0.5)));
-    color = mix(color, color * 0.5, vein * 0.35 * smoothstep(0.1, 0.9, radial));
+    // bright rim light hugging the silhouette, warmed with gold
+    color += mix(mix(CYAN, GOLD, 0.5), vec3(1.0), 0.4) * pow(rim, 1.6) * 1.05;
 
-    // A soft eyespot anchored on the forewing — the one marking guaranteed
-    // to survive being shrunk to a few dozen pixels.
-    vec2 spotCenter = vec2(0.30 * uSide, 0.10);
-    float spotDist = length(uv - spotCenter) * SCALE;
-    float spotRing = smoothstep(2.7, 2.3, spotDist) - smoothstep(1.8, 1.4, spotDist);
-    float spotCore = smoothstep(1.6, 0.7, spotDist);
-    color = mix(color, INK, spotRing * float(isFore));
-    color = mix(color, mix(GOLD, vec3(1.0), 0.6), spotCore * float(isFore));
-
-    // Warm inner glow at the hinge — the light source lives at the thorax.
-    // Kept clear of the ink border so the border reads crisp and dark.
-    color += GOLD * 0.30 * pow(1.0 - radial, 5.0) * (1.0 - borderBand);
-
-    color = mix(color, INK, borderBand * 0.92);
-
-    // A thin bright halo just outside the ink line, in the anti-aliased
-    // falloff where alpha is already fading — reads as light catching the
-    // wing edge without ever competing with the ink itself.
-    float outerHalo = (1.0 - edgeMask) * smoothstep(-aa * 4.0, -aa * 0.5, d);
-    color += mix(GOLD, vec3(1.0), 0.5) * outerHalo * 1.4;
-
-    // Slow iridescent shimmer over the whole wing.
+    // slow iridescent shimmer
     float sh = uTime * 0.9 + radial * 5.0 + uSeed * 6.0;
-    color += 0.05 * vec3(sin(sh), sin(sh + 2.1), sin(sh + 4.2)) * (1.0 - borderBand);
+    color += 0.055 * vec3(sin(sh), sin(sh + 2.1), sin(sh + 4.2));
 
     // pre-departure warm-up
-    color += uHighlight * vec3(1.0, 0.72, 0.32) * 0.62 * (1.0 - borderBand * 0.7);
+    color += uHighlight * vec3(1.0, 0.72, 0.32) * 0.62;
 
-    float alpha = uOpacity * edgeMask;
+    // glass: translucent through the middle, solid along the rim
+    float alpha = uOpacity * smoothstep(0.0, 0.35, d) * (0.66 + 0.34 * pow(rim, 1.2));
     gl_FragColor = vec4(color, alpha);
   }
 `;
@@ -1024,7 +980,7 @@ function loadTerminalFlowers() {
     });
 }
 
-loadGardenVideoTexture("assets/playbalst54243.mp4")
+loadGardenVideoTexture("assets/playbalst675464564646.mp4")
   .then(({ texture, video, mediaAspect, mediaResolution }) => {
     livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
     gardenVideoEl = video;
