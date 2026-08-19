@@ -10,9 +10,13 @@
   --stroke: rgba(15, 23, 32, 0.12);
   --stroke-soft: rgba(15, 23, 32, 0.07);
 
+  /* Panel ink. These sit on thin glass over a bright, moving garden, so
+     low-alpha greys wash out — the plate keeps shifting underneath them.
+     Kept as three steps so the hierarchy (content > label > count) still
+     reads, just with every step opaque enough to hold against the video. */
   --text: #141a21;
-  --muted: rgba(20, 26, 33, 0.58);
-  --faint: rgba(20, 26, 33, 0.40);
+  --muted: rgba(20, 26, 33, 0.86);
+  --faint: rgba(20, 26, 33, 0.66);
 
   --cyan: #62dcff;
   --amber: #ffc46b;
@@ -78,6 +82,7 @@ body {
 .stage {
   position: fixed;
   inset: 0;
+  z-index: 1;
 }
 
 #scene {
@@ -104,6 +109,7 @@ body {
   pointer-events: none;
   overflow: hidden;
   transition: opacity 0.5s ease;
+  z-index: 10;
 }
 
 .zone-label,
@@ -226,6 +232,7 @@ body {
   inset: 0;
   padding: var(--hud-padding);
   pointer-events: none;
+  z-index: 15;
 }
 
 .panel {
@@ -244,16 +251,22 @@ body {
   animation: panel-in 0.9s cubic-bezier(0.16, 1, 0.3, 1) 1.9s forwards;
 }
 
-/* Hairline of light along the top edge — the "glass art" tell */
+/* Hairline of light along the top edge — the "glass art" tell.
+   Height-capped and z-indexed below the content on purpose: with inset:0
+   on a full-height sidebar the 38% fade ran ~350px down the panel, and
+   an absolutely-positioned ::before with no z-index paints over static
+   children — so it was washing a white veil across the heading. */
 .panel::before {
   content: "";
   position: absolute;
-  inset: 0;
-  border-radius: inherit;
+  inset: 0 0 auto;
+  height: 80px;
+  z-index: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
   pointer-events: none;
   background: linear-gradient(180deg,
       var(--glass-hi) 0%,
-      rgba(255, 255, 255, 0) 38%);
+      rgba(255, 255, 255, 0) 100%);
 }
 
 @keyframes panel-in {
@@ -277,6 +290,8 @@ body {
 }
 
 .hp-block {
+  position: relative;
+  z-index: 1;   /* above .panel::before's top sheen */
   padding: var(--pad);
 }
 
@@ -303,11 +318,16 @@ body {
   gap: 8px;
 }
 
+/* Solid black, no shadow: the glass sits over the bright garden, so the
+   header reads by being darker than its backdrop. The subtitle drops the
+   58% --muted it used to carry — at 10px over a busy, moving plate that
+   translucency was what made it look washed out. */
 .tower-title {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.02em;
+  color: #000;
 }
 
 .tower-sub {
@@ -316,7 +336,7 @@ body {
   font-size: 10px;
   letter-spacing: 0.10em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: #000;
 }
 
 .live-dot {

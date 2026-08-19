@@ -7,6 +7,15 @@
   <title>Flight Garden · Live Traffic</title>
   <meta name="description" content="An airport operations visualization disguised as a living garden. Butterflies are flights." />
   <link rel="icon" href="data:," />
+  <script>
+    window.onerror = function(message, source, lineno, colno, error) {
+      const errStr = `${message} at ${source}:${lineno}:${colno}`;
+      fetch('/api/log?err=' + encodeURIComponent(errStr)).catch(() => {});
+    };
+    window.addEventListener('unhandledrejection', function(event) {
+      fetch('/api/log?err=' + encodeURIComponent('Unhandled Rejection: ' + event.reason)).catch(() => {});
+    });
+  </script>
   <link rel="stylesheet" href="style.css" />
 
   <script type="importmap">

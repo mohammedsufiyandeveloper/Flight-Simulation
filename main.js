@@ -649,6 +649,16 @@ async function loadGardenVideoTexture(url) {
     video.addEventListener("error", () => reject(video.error ?? new Error("video load error")), { once: true });
   });
 
+  // Append to DOM to prevent Chrome's compositor from throttling video updates
+  video.style.position = "absolute";
+  video.style.width = "1px";
+  video.style.height = "1px";
+  video.style.opacity = "0";
+  video.style.pointerEvents = "none";
+  video.style.overflow = "hidden";
+  video.style.zIndex = "-1";
+  document.body.appendChild(video);
+
   try {
     await video.play();
   } catch (err) {
@@ -667,33 +677,6 @@ async function loadGardenVideoTexture(url) {
   video.addEventListener("pause", () => {
     video.play().catch(() => { });
   });
-
-  // video.loop's end-of-media restart visibly hitches in several browsers
-  // (a decoder flush/keyframe seek treated as a special case right at the
-  // last frame). Loop proactively instead: seek back to 0 a hair before the
-  // real end, while still mid-playback, so the same cheap seek-to-keyframe-0
-  // happens without the end-of-media overhead. video.loop stays on as a
-  // fallback in case this never quite reaches the threshold on a given frame.
-  // Scaled by playbackRate: the wind-speed control can run this up to 2x
-  // (see WIND_API.maxRate below), which widens the video-time gap between
-  // successive frame callbacks. A fixed lead can get skipped past at higher
-  // rates, falling through to the hitchy native video.loop restart above.
-  const LOOP_LEAD_BASE = 0.08; // seconds of lead time before the true end, at 1x
-  const loopBack = () => {
-    const lead = LOOP_LEAD_BASE * Math.max(video.playbackRate, 1);
-    if (video.duration && video.currentTime >= video.duration - lead) {
-      video.currentTime = 0;
-    }
-  };
-  if (typeof video.requestVideoFrameCallback === "function") {
-    const onFrame = () => {
-      loopBack();
-      video.requestVideoFrameCallback(onFrame);
-    };
-    video.requestVideoFrameCallback(onFrame);
-  } else {
-    video.addEventListener("timeupdate", loopBack);
-  }
 
   const texture = new THREE.VideoTexture(video);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -984,7 +967,6 @@ loadGardenVideoTexture("assets/renderart.mp4")
     }
   })
   .finally(() => {
-    initHUDToggle();
     beginIntro();
   });
 
@@ -2761,6 +2743,7 @@ ui.select.value = "BLR";
 loadAirport("BLR");
 clearDetail();
 
+initHUDToggle();
 initPostProcessing();
 animate();
 
