@@ -5,7 +5,7 @@ Thumbs.db
 .vercel
 .env*
 
-# Source butterfly render frames (930 x 1920x1080 PNGs, ~750MB) — never
+# Source butterfly render frames (57 x 1920x1080 PNGs, ~46MB) — never
 # meant to ship. assets/butterfly_atlas.webp is the packed atlas derived
 # from these that the app actually loads.
 assets/ASAS0063/

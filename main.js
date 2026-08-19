@@ -294,28 +294,30 @@ function makeGlowTexture(size = 128) {
 const GLOW_TEX = makeGlowTexture();
 
 const SHARED = {
-  // Aspect matches the cropped source frames (1190×930) so the sprite
+  // Aspect matches the cropped source frames (1470×1080) so the sprite
   // isn't stretched. Sized down from the crop's tight fill (the old
   // procedural wing only used ~75% of its own plane, so matching plane
   // sizes 1:1 read visibly bigger once this art fills nearly the whole
   // quad) to land back at the original on-screen footprint.
-  butterflyGeo: new THREE.PlaneGeometry(0.30, 0.30 * (930 / 1190))
+  butterflyGeo: new THREE.PlaneGeometry(0.30, 0.30 * (1080 / 1470))
 };
 
 /* =================================================================
    6 · BUTTERFLY SPRITE ATLAS
-   Real rendered butterfly art — the full flap cycle (all 60 frames of
-   the source's clean loop) packed into a 10×6 grid texture — replaces
-   the old procedural wing shader. uFrame selects the atlas cell each
+   Real rendered butterfly art — the full flap cycle (all 57 frames of
+   the ASAS0063 source sequence) packed into an 8×8 grid texture —
+   replaces the old procedural wing shader. The grid is deliberately
+   larger than the cycle (64 cells, 57 used) so the layout stays square;
+   uFrames, not the grid size, bounds playback. uFrame selects the cell each
    instance is showing; colour is remapped from the source's own
    luminance into a livery-tinted duotone rather than multiplying the
    (blue-biased) source RGB directly, which would crush any warm
    livery toward black.
    ================================================================= */
 
-const BUTTERFLY_ATLAS_COLS = 10;
-const BUTTERFLY_ATLAS_ROWS = 6;
-const BUTTERFLY_ATLAS_FRAMES = BUTTERFLY_ATLAS_COLS * BUTTERFLY_ATLAS_ROWS;
+const BUTTERFLY_ATLAS_COLS = 8;
+const BUTTERFLY_ATLAS_ROWS = 8;
+const BUTTERFLY_ATLAS_FRAMES = 57;   // cells 57..63 of the 8×8 grid are empty
 
 const BUTTERFLY_TEX = new THREE.TextureLoader().load("assets/butterfly_atlas.webp");
 BUTTERFLY_TEX.colorSpace = THREE.SRGBColorSpace;
@@ -337,21 +339,22 @@ const SPRITE_FRAG = /* glsl */`
   uniform sampler2D uMap;
   uniform float uCols;
   uniform float uRows;
-  uniform float uFrame;       // atlas cell, 0..(cols*rows - 1)
+  uniform float uFrames;      // frames actually in the cycle (≤ cols*rows)
+  uniform float uFrame;       // atlas cell, 0..(uFrames - 1)
   uniform float uOpacity;
   uniform vec3  uColor;       // airline livery
   uniform float uTint;        // how much livery survives the source art
-  uniform float uHighlight;   // 0..1 pre-departure brightening
+  uniform float uHighlight;   // 0..1 pre-departure warm-up
+  uniform float uSelect;      // 0..1 hover / pinned
 
   varying vec2 vUv;
 
   void main(){
-    // uFrame is a continuous 0..(cols*rows) sweep; rounding to the nearest
-    // integer can land exactly on cols*rows (an out-of-range index — row
-    // -1 of the atlas) right at the loop seam, which read as a glitch/pop
-    // once per cycle. Wrapping keeps it a clean 0..(cols*rows - 1) loop.
-    float totalFrames = uCols * uRows;
-    float frame = mod(floor(uFrame + 0.5), totalFrames);
+    // uFrame is a continuous 0..uFrames sweep; rounding to the nearest
+    // integer can land exactly on uFrames (past the end of the cycle —
+    // an empty tail cell here) right at the loop seam, which read as a
+    // glitch/pop once per cycle. Wrapping keeps it a clean loop.
+    float frame = mod(floor(uFrame + 0.5), uFrames);
     float col = mod(frame, uCols);
     float rowFromTop = floor(frame / uCols);
     // three.js flips textures on upload (row 0 of the source image ends
@@ -365,14 +368,21 @@ const SPRITE_FRAG = /* glsl */`
     // Recolour by luminance rather than multiplying RGB — the source
     // render is blue-biased, so a straight multiply would crush any
     // warm livery colour toward black instead of reading as that colour.
+    // The ramp carries a luminance gain and a bright top end: without it
+    // the source's own mid-tones sit too dark to read against the night
+    // garden. This is exposure on the art that's already there, not a
+    // glow layered over it.
     float lum = dot(texel.rgb, vec3(0.299, 0.587, 0.114));
     vec3 dark = uColor * 0.32;
     vec3 light = mix(uColor, vec3(1.0), 0.65);
     vec3 duotone = mix(dark, light, clamp(lum * 1.7, 0.0, 1.0));
     vec3 color = mix(texel.rgb, duotone, uTint);
 
-    // pre-departure warm-up
-    color += uHighlight * vec3(1.0, 0.72, 0.32) * 0.55;
+    // Pre-departure and selection read as a small exposure lift and warm
+    // shift — scaling the art's own light rather than adding light of
+    // their own, so nothing on the butterfly emits or blooms.
+    color *= 1.0 + uHighlight * 0.35 + uSelect * 0.20;
+    color = mix(color, color * vec3(1.08, 0.97, 0.84), uHighlight);
 
     gl_FragColor = vec4(color, texel.a * uOpacity);
   }
@@ -390,11 +400,13 @@ function makeButterflyMaterial(color, tint) {
       uMap: { value: BUTTERFLY_TEX },
       uCols: { value: BUTTERFLY_ATLAS_COLS },
       uRows: { value: BUTTERFLY_ATLAS_ROWS },
+      uFrames: { value: BUTTERFLY_ATLAS_FRAMES },
       uFrame: { value: 0 },
       uOpacity: { value: 1 },
       uColor: { value: color.clone() },
       uTint: { value: tint },
-      uHighlight: { value: 0 }
+      uHighlight: { value: 0 },
+      uSelect: { value: 0 }
     }
   });
 }
@@ -944,7 +956,7 @@ function loadTerminalFlowers() {
     });
 }
 
-loadGardenVideoTexture("assets/playbalst35345346.mp4")
+loadGardenVideoTexture("assets/renderart.mp4")
   .then(({ texture, video, mediaAspect, mediaResolution }) => {
     livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
     gardenVideoEl = video;
@@ -1900,38 +1912,9 @@ class Butterfly {
     this.wingMesh.renderOrder = 10;
     this.mesh.add(this.wingMesh);
 
-    // soft airline-coloured halo
-    this.glowMat = new THREE.SpriteMaterial({
-      map: GLOW_TEX,
-      color: color.clone(),
-      transparent: true,
-      opacity: 0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      depthTest: false
-    });
-    this.glow = new THREE.Sprite(this.glowMat);
-    this.glow.scale.setScalar(0.42);
-    this.glow.position.z = -0.01;
-    this.glow.renderOrder = 9;
-    this.mesh.add(this.glow);
-
-    // warm golden core glow at the thorax — the "magic" that reads even when
-    // the butterfly is small on screen, layered in front of the airline halo
-    this.coreGlowMat = new THREE.SpriteMaterial({
-      map: GLOW_TEX,
-      color: new THREE.Color(0xffd27a),
-      transparent: true,
-      opacity: 0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      depthTest: false
-    });
-    this.coreGlow = new THREE.Sprite(this.coreGlowMat);
-    this.coreGlow.scale.setScalar(0.15);
-    this.coreGlow.position.z = 0.015;
-    this.coreGlow.renderOrder = 12;
-    this.mesh.add(this.coreGlow);
+    // No halo or core-glow sprite: the source render carries its own
+    // light, and stacking additive glows on top of it read as a lamp
+    // with a butterfly drawn on it rather than as a butterfly.
 
     // invisible, generously sized hit target for hover / tap
     this.pickMat = new THREE.SpriteMaterial({ opacity: 0, transparent: true, depthWrite: false });
@@ -2035,7 +2018,7 @@ class Butterfly {
     this.applyBreeze(dt, elapsed);
     this.applyPose(dt);
     this.applyWings(dt);
-    this.applyMaterials(elapsed, master);
+    this.applyMaterials(master);
 
     const moving = this.speed > 0.05;
     this.trail.update(this.position, moving && this.opacity > 0.2, master);
@@ -2183,27 +2166,14 @@ class Butterfly {
     this.wingMat.uniforms.uFrame.value = cycle * BUTTERFLY_ATLAS_FRAMES;
   }
 
-  applyMaterials(elapsed, master) {
+  applyMaterials(master) {
     const o = clamp(this.opacity, 0, 1) * master;
 
     this.wingMat.uniforms.uOpacity.value = o;
     this.wingMat.uniforms.uHighlight.value = this.highlight;
 
     const selected = this === pinned || this === hovered;
-    const base = this.state === "boarding" ? 0.32 + this.highlight * 0.30 : 0.26;
-    this.glowMat.opacity = (base + (selected ? 0.30 : 0)) * o;
-    this.glow.scale.setScalar(0.54 + this.highlight * 0.16 + (selected ? 0.14 : 0));
-
-    this.glowMat.color.copy(this.airline.threeColor);
-    if (this.highlight > 0.01) {
-      this.glowMat.color.lerp(COLOR.departure, this.highlight * 0.6);
-    }
-
-    // warm core glow: a slow, per-flight breath so a field of parked
-    // butterflies never pulses in lockstep
-    const breathe = 0.82 + 0.18 * Math.sin(elapsed * 2.4 + this.seed * 12.0);
-    this.coreGlowMat.opacity = (0.68 + this.highlight * 0.25) * breathe * o;
-    this.coreGlow.scale.setScalar(0.19 + this.highlight * 0.05);
+    this.wingMat.uniforms.uSelect.value = selected ? 1 : 0;
   }
 
   /* ---------------- teardown ---------------- */
@@ -2215,8 +2185,6 @@ class Butterfly {
     scene.remove(this.mesh);
 
     this.wingMat.dispose();
-    this.glowMat.dispose();
-    this.coreGlowMat.dispose();
     this.pickMat.dispose();
     this.trail.dispose();
 
