@@ -64,9 +64,25 @@ const GARDEN_VIDEO = {
   scale: 1.0,
   offsetX: 0.0,
   offsetY: 0.0,
+  sharpenMobile: 0.0,
   sharpenDesktop: 0.28,
-  sharpenMobile: 0.0
+  // The source video is 1920×1080. Stretched across a large-format display
+  // (a 55"+ TV or an interactive touch panel used as a monitor) that's a
+  // real, low pixel density — an 86" 4K panel is ~51 PPI, under half this
+  // video's native pixel count — so the bilinear softness is worse there
+  // than on a normal desktop monitor at the same CSS width. A stronger
+  // unsharp-mask pass is the one lever that actually helps; it can't
+  // invent detail the source doesn't have, but it meaningfully improves
+  // perceived crispness.
+  sharpenLarge: 0.48
 };
+
+/** Picks the garden video's unsharp-mask strength for the current viewport. */
+function pickSharpenAmount(cssWidth) {
+  if (cssWidth < 720) return GARDEN_VIDEO.sharpenMobile;
+  if (cssWidth > 2200) return GARDEN_VIDEO.sharpenLarge;
+  return GARDEN_VIDEO.sharpenDesktop;
+}
 
 const VIDEO_RENDER_QUALITY = {
   desktopDpr: 2.5,
@@ -278,27 +294,36 @@ function makeGlowTexture(size = 128) {
 const GLOW_TEX = makeGlowTexture();
 
 const SHARED = {
-  wingGeo: new THREE.PlaneGeometry(0.28, 0.28),
-  bodyGeo: new THREE.SphereGeometry(0.014, 8, 6),
-  headGeo: new THREE.SphereGeometry(0.013, 8, 6),
-  antennaGeo: (() => {
-    const g = new THREE.CylinderGeometry(0.0012, 0.0004, 0.05, 3);
-    g.translate(0, 0.025, 0);   // pivot at the base
-    return g;
-  })(),
-  tipGeo: new THREE.SphereGeometry(0.0035, 4, 3)
+  // Aspect matches the cropped source frames (1190×930) so the sprite
+  // isn't stretched. Sized down from the crop's tight fill (the old
+  // procedural wing only used ~75% of its own plane, so matching plane
+  // sizes 1:1 read visibly bigger once this art fills nearly the whole
+  // quad) to land back at the original on-screen footprint.
+  butterflyGeo: new THREE.PlaneGeometry(0.30, 0.30 * (930 / 1190))
 };
 
-SHARED.bodyGeo.scale(0.8, 3.4, 0.8);
-
 /* =================================================================
-   6 · BUTTERFLY WING SHADER
-   The wing silhouette is a polar rose; colour is driven by the
-   airline, and uHighlight lets a departing flight "brighten before
-   takeoff" the way an aircraft lights up on pushback.
+   6 · BUTTERFLY SPRITE ATLAS
+   Real rendered butterfly art — the full flap cycle (all 60 frames of
+   the source's clean loop) packed into a 10×6 grid texture — replaces
+   the old procedural wing shader. uFrame selects the atlas cell each
+   instance is showing; colour is remapped from the source's own
+   luminance into a livery-tinted duotone rather than multiplying the
+   (blue-biased) source RGB directly, which would crush any warm
+   livery toward black.
    ================================================================= */
 
-const WING_VERT = /* glsl */`
+const BUTTERFLY_ATLAS_COLS = 10;
+const BUTTERFLY_ATLAS_ROWS = 6;
+const BUTTERFLY_ATLAS_FRAMES = BUTTERFLY_ATLAS_COLS * BUTTERFLY_ATLAS_ROWS;
+
+const BUTTERFLY_TEX = new THREE.TextureLoader().load("assets/butterfly_atlas.webp");
+BUTTERFLY_TEX.colorSpace = THREE.SRGBColorSpace;
+BUTTERFLY_TEX.generateMipmaps = false;
+BUTTERFLY_TEX.minFilter = THREE.LinearFilter;
+BUTTERFLY_TEX.magFilter = THREE.LinearFilter;
+
+const SPRITE_VERT = /* glsl */`
   varying vec2 vUv;
   void main(){
     vUv = uv;
@@ -306,135 +331,70 @@ const WING_VERT = /* glsl */`
   }
 `;
 
-const WING_FRAG = /* glsl */`
+const SPRITE_FRAG = /* glsl */`
   precision highp float;
 
-  uniform float uTime;
-  uniform vec2  uResolution;
+  uniform sampler2D uMap;
+  uniform float uCols;
+  uniform float uRows;
+  uniform float uFrame;       // atlas cell, 0..(cols*rows - 1)
   uniform float uOpacity;
-  uniform float uSide;        // -1 = left half, +1 = right half
   uniform vec3  uColor;       // airline livery
+  uniform float uTint;        // how much livery survives the source art
   uniform float uHighlight;   // 0..1 pre-departure brightening
-  uniform float uSeed;        // per-flight speckle + shimmer offset
-  uniform float uTint;        // how much livery survives the luminous base
 
   varying vec2 vUv;
 
-  const float SCALE = 22.8;
-
-  // The luminous palette. Every butterfly is glass lit from within; the airline
-  // colour is a tint through that glass, never a replacement for it.
-  const vec3 DEEP = vec3(0.05, 0.16, 0.72);   // sapphire, wing edges
-  const vec3 CYAN = vec3(0.22, 0.80, 1.00);   // electric core, near the body
-  const vec3 GOLD = vec3(1.00, 0.80, 0.38);   // warm fairy-light at the thorax
-
-  // Polar silhouette of a butterfly wing pair.
-  float wingField(float r, float t){
-    return 7.2 - 0.5*sin(t) + 2.5*sin(3.0*t) + 2.0*sin(5.0*t) - 1.7*sin(7.0*t)
-         + 3.0*cos(2.0*t) - 2.0*cos(4.0*t) - 0.4*cos(16.0*t) - r;
-  }
-
-  float hash21(vec2 p){
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
-  }
-
   void main(){
-    vec2 fragCoord = vUv * uResolution;
-    vec2 uv = (2.0 * fragCoord - uResolution.xy) / uResolution.y * 0.7;
+    // uFrame is a continuous 0..(cols*rows) sweep; rounding to the nearest
+    // integer can land exactly on cols*rows (an out-of-range index — row
+    // -1 of the atlas) right at the loop seam, which read as a glitch/pop
+    // once per cycle. Wrapping keeps it a clean 0..(cols*rows - 1) loop.
+    float totalFrames = uCols * uRows;
+    float frame = mod(floor(uFrame + 0.5), totalFrames);
+    float col = mod(frame, uCols);
+    float rowFromTop = floor(frame / uCols);
+    // three.js flips textures on upload (row 0 of the source image ends
+    // up at v=1), so the atlas's visual top row is also v-space's top.
+    float rowFromBottom = uRows - 1.0 - rowFromTop;
+    vec2 cell = vec2(1.0 / uCols, 1.0 / uRows);
+    vec2 atlasUv = (vec2(col, rowFromBottom) + vUv) * cell;
 
-    // Each mesh renders exactly one half so the two can flap independently.
-    if (uSide < 0.0 && uv.x > 0.0) discard;
-    if (uSide > 0.0 && uv.x < 0.0) discard;
+    vec4 texel = texture2D(uMap, atlasUv);
 
-    float r = length(uv * SCALE);
-    float t = atan(uv.y, uv.x);
-    float d = wingField(r, t);
-
-    // Anti-aliased silhouette edge — a hard discard leaves visible jaggies
-    // at the small size these render on screen; a soft band keyed to the
-    // local gradient keeps the outline crisp instead.
-    float aa = fwidth(d) * 1.5 + 0.001;
-    if (d < -aa * 4.0) discard;
-    float edgeMask = smoothstep(-aa, aa, d);
-
-    // A tight rim: the pale edge must hug the silhouette, otherwise it floods
-    // the whole wing and bloom turns every butterfly into a white smudge.
-    float inside = smoothstep(0.0, 1.2, d);          // 0 at the rim
-    float rim    = 1.0 - inside;
-    float radial = clamp(r / 13.0, 0.0, 1.0);        // 0 at the body
-
-    // sapphire at the edges, electric cyan toward the body
-    vec3 color = mix(CYAN, DEEP, smoothstep(0.15, 0.95, radial));
-
-    // livery tint — dominant across the whole wing so each butterfly reads
-    // clearly as its own airline's colour, not just tinted at the edges
-    color = mix(color, uColor, uTint * (0.65 + 0.35 * radial));
-
-    // inner glow — the light source lives at the thorax; a warm gold core
-    // sits under the electric cyan so the wing reads as lit from within,
-    // closer to a firefly than a neon sign.
-    color += CYAN * 0.54 * pow(1.0 - radial, 3.0);
-    color += GOLD * 0.48 * pow(1.0 - radial, 5.0);
-
-    // radiating veins, darkened glass between the ribs
-    float vein = smoothstep(0.86, 1.0, abs(sin(t * 7.0 + 0.4)));
-    color = mix(color, color * 0.55 + CYAN * 0.10, vein * 0.30 * inside);
-
-    // star speckles, scattered and biased toward the wing edges — warm
-    // white/gold so they read as fairy dust rather than frost
-    vec2 grid  = uv * 26.0 + uSeed * 13.0;
-    vec2 cell  = floor(grid);
-    float h    = hash21(cell);
-    vec2 jitter = vec2(hash21(cell + 1.7), hash21(cell + 3.1)) - 0.5;
-    float star = smoothstep(0.17, 0.0, length(fract(grid) - 0.5 - jitter * 0.6))
-               * step(0.83, h);
-    float twinkle = 0.55 + 0.45 * sin(uTime * 2.6 + h * 30.0);
-    vec3 speckle = mix(vec3(1.0, 0.86, 0.55), vec3(1.0, 1.0, 1.0), h);
-    color += speckle * star * twinkle * smoothstep(0.25, 0.95, radial) * 1.4;
-
-    // tiny shimmering dots hugging the wing border — small, fast, gold
-    vec2 grid2 = uv * 44.0 + uSeed * 27.0;
-    vec2 cell2 = floor(grid2);
-    float h2   = hash21(cell2 + 9.2);
-    float star2 = smoothstep(0.14, 0.0, length(fract(grid2) - 0.5)) * step(0.90, h2);
-    float twinkle2 = 0.5 + 0.5 * sin(uTime * 3.4 + h2 * 40.0);
-    color += vec3(1.0, 0.88, 0.55) * star2 * twinkle2 * pow(rim, 1.3) * 1.5;
-
-    // bright rim light hugging the silhouette, warmed with gold
-    color += mix(mix(CYAN, GOLD, 0.5), vec3(1.0), 0.4) * pow(rim, 1.5) * 1.5;
-
-    // slow iridescent shimmer — a touch richer than before
-    float sh = uTime * 0.9 + radial * 5.0 + uSeed * 6.0;
-    color += 0.08 * vec3(sin(sh), sin(sh + 2.1), sin(sh + 4.2));
+    // Recolour by luminance rather than multiplying RGB — the source
+    // render is blue-biased, so a straight multiply would crush any
+    // warm livery colour toward black instead of reading as that colour.
+    float lum = dot(texel.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 dark = uColor * 0.32;
+    vec3 light = mix(uColor, vec3(1.0), 0.65);
+    vec3 duotone = mix(dark, light, clamp(lum * 1.7, 0.0, 1.0));
+    vec3 color = mix(texel.rgb, duotone, uTint);
 
     // pre-departure warm-up
-    color += uHighlight * vec3(1.0, 0.72, 0.32) * 0.62;
+    color += uHighlight * vec3(1.0, 0.72, 0.32) * 0.55;
 
-    // glass: translucent through the middle, solid along the rim
-    float alpha = uOpacity * edgeMask * (0.66 + 0.34 * pow(rim, 1.2));
-    gl_FragColor = vec4(color, alpha);
+    gl_FragColor = vec4(color, texel.a * uOpacity);
   }
 `;
 
-function makeWingMaterial(side, color, seed, tint) {
+function makeButterflyMaterial(color, tint) {
   return new THREE.ShaderMaterial({
-    vertexShader: WING_VERT,
-    fragmentShader: WING_FRAG,
+    vertexShader: SPRITE_VERT,
+    fragmentShader: SPRITE_FRAG,
     transparent: true,
     depthWrite: false,
     depthTest: false,
     side: THREE.DoubleSide,
     uniforms: {
-      uTime: { value: Math.random() * 10 },
-      uResolution: { value: new THREE.Vector2(512, 512) },
+      uMap: { value: BUTTERFLY_TEX },
+      uCols: { value: BUTTERFLY_ATLAS_COLS },
+      uRows: { value: BUTTERFLY_ATLAS_ROWS },
+      uFrame: { value: 0 },
       uOpacity: { value: 1 },
-      uSide: { value: side },
       uColor: { value: color.clone() },
-      uHighlight: { value: 0 },
-      uSeed: { value: seed },
-      uTint: { value: tint }
+      uTint: { value: tint },
+      uHighlight: { value: 0 }
     }
   });
 }
@@ -560,9 +520,7 @@ class LivingGarden {
         uVideoScale: { value: GARDEN_VIDEO.scale },
         uVideoOffset: { value: new THREE.Vector2(GARDEN_VIDEO.offsetX, GARDEN_VIDEO.offsetY) },
         uVideoResolution: { value: new THREE.Vector2(mediaResolution[0], mediaResolution[1]) },
-        uSharpenAmount: {
-          value: window.innerWidth < 720 ? GARDEN_VIDEO.sharpenMobile : GARDEN_VIDEO.sharpenDesktop
-        }
+        uSharpenAmount: { value: pickSharpenAmount(window.innerWidth) }
       }
     });
 
@@ -1935,56 +1893,12 @@ class Butterfly {
     this.mesh.scale.setScalar(0.6 * BUTTERFLY_SCALE);      // Reduce butterfly size by 40%
     scene.add(this.mesh);
 
-    // wings: two half-planes sharing a centreline, each on its own pivot
-    this.leftPivot = new THREE.Group();
-    this.rightPivot = new THREE.Group();
-    this.mesh.add(this.leftPivot, this.rightPivot);
-
-    this.leftMat = makeWingMaterial(-1, color, this.seed, this.tint);
-    this.rightMat = makeWingMaterial(1, color, this.seed, this.tint);
-
-    this.leftWing = new THREE.Mesh(SHARED.wingGeo, this.leftMat);
-    this.rightWing = new THREE.Mesh(SHARED.wingGeo, this.rightMat);
-    this.leftWing.renderOrder = 10;
-    this.rightWing.renderOrder = 10;
-    this.leftPivot.add(this.leftWing);
-    this.rightPivot.add(this.rightWing);
-
-    // The body must fade with the wings, so it owns its own material rather
-    // than sharing one — otherwise a dark speck pops in before the flight does.
-    // Deep navy, not black: against luminous glass wings a neutral-dark body
-    // reads as a hole punched through the butterfly.
-    this.bodyMat = new THREE.MeshBasicMaterial({
-      color: 0x1b2a4d,
-      transparent: true,
-      opacity: 1,
-      depthWrite: false,
-      depthTest: false
-    });
-
-    // body sits just in front of the wings so it always reads
-    const body = new THREE.Mesh(SHARED.bodyGeo, this.bodyMat);
-    body.position.z = 0.012;
-    body.renderOrder = 11;
-
-    const head = new THREE.Mesh(SHARED.headGeo, this.bodyMat);
-    head.position.set(0, 0.052, 0.013);
-    head.renderOrder = 11;
-
-    this.mesh.add(body, head);
-
-    for (const side of [-1, 1]) {
-      const antenna = new THREE.Mesh(SHARED.antennaGeo, this.bodyMat);
-      antenna.position.set(side * 0.008, 0.060, 0.013);
-      antenna.rotation.z = -side * 0.5;
-      antenna.renderOrder = 11;
-
-      const tip = new THREE.Mesh(SHARED.tipGeo, this.bodyMat);
-      tip.position.y = 0.05;
-      antenna.add(tip);
-
-      this.mesh.add(antenna);
-    }
+    // wing/body/antennae are all one sprite — baked into the atlas art —
+    // animated by swapping frames rather than rotating separate pieces.
+    this.wingMat = makeButterflyMaterial(color, this.tint);
+    this.wingMesh = new THREE.Mesh(SHARED.butterflyGeo, this.wingMat);
+    this.wingMesh.renderOrder = 10;
+    this.mesh.add(this.wingMesh);
 
     // soft airline-coloured halo
     this.glowMat = new THREE.SpriteMaterial({
@@ -2120,7 +2034,7 @@ class Butterfly {
 
     this.applyBreeze(dt, elapsed);
     this.applyPose(dt);
-    this.applyWings(dt, elapsed);
+    this.applyWings(dt);
     this.applyMaterials(elapsed, master);
 
     const moving = this.speed > 0.05;
@@ -2244,42 +2158,36 @@ class Butterfly {
     this.mesh.rotation.x = grounded ? -0.26 : -0.30 + Math.abs(this.bank) * 0.12;
   }
 
-  applyWings(dt, elapsed) {
-    let rate, amplitude;
+  /** Picks the atlas frame for this instant — a real captured flap cycle
+   *  played back at a per-state rate, rather than a synthetic rotation. */
+  applyWings(dt) {
+    let rate;
 
+    // Much slower than the old procedural-shader rates — that version was
+    // a smooth continuous rotation, so a fast rate still read as fluid;
+    // snapping between real captured frames at the same rate instead
+    // reads as a frantic blur, and the source footage's own natural pace
+    // is a slow, graceful ~2-2.5s per cycle (rate 2.3-2.7 ≈ one cycle
+    // every 2π/rate seconds).
     if (this.state === "parked") {
-      rate = 1.7 * this.flutter;
-      amplitude = 0.30;
+      rate = 1.0 * this.flutter;
     } else if (this.state === "boarding") {
-      rate = 3.2 * this.flutter;
-      amplitude = 0.40;
+      rate = 1.8 * this.flutter;
     } else {
-      rate = (7.0 + this.speed * 4.5) * this.flutter;
-      amplitude = 0.62 + Math.min(this.speed, 1.2) * 0.28;
+      rate = (2.3 + this.speed * 1.3) * this.flutter;
     }
 
     this.flapPhase = (this.flapPhase ?? rand(0, 6.28)) + rate * dt;
 
-    // sharpen the stroke: fast down, slow up — that's what reads as "alive"
-    const raw = Math.sin(this.flapPhase);
-    const shaped = Math.sign(raw) * Math.pow(Math.abs(raw), 0.62);
-    const angle = shaped * amplitude;
-
-    this.leftPivot.rotation.y = angle;
-    this.rightPivot.rotation.y = -angle;
+    const cycle = (this.flapPhase / (Math.PI * 2)) % 1;
+    this.wingMat.uniforms.uFrame.value = cycle * BUTTERFLY_ATLAS_FRAMES;
   }
 
   applyMaterials(elapsed, master) {
     const o = clamp(this.opacity, 0, 1) * master;
 
-    this.leftMat.uniforms.uTime.value = elapsed;
-    this.rightMat.uniforms.uTime.value = elapsed;
-    this.leftMat.uniforms.uOpacity.value = o;
-    this.rightMat.uniforms.uOpacity.value = o;
-    this.leftMat.uniforms.uHighlight.value = this.highlight;
-    this.rightMat.uniforms.uHighlight.value = this.highlight;
-
-    this.bodyMat.opacity = o;
+    this.wingMat.uniforms.uOpacity.value = o;
+    this.wingMat.uniforms.uHighlight.value = this.highlight;
 
     const selected = this === pinned || this === hovered;
     const base = this.state === "boarding" ? 0.32 + this.highlight * 0.30 : 0.26;
@@ -2306,9 +2214,7 @@ class Butterfly {
 
     scene.remove(this.mesh);
 
-    this.leftMat.dispose();
-    this.rightMat.dispose();
-    this.bodyMat.dispose();
+    this.wingMat.dispose();
     this.glowMat.dispose();
     this.coreGlowMat.dispose();
     this.pickMat.dispose();
@@ -2800,8 +2706,7 @@ function resize() {
   motes.mat.uniforms.uScale.value = renderer.getDrawingBufferSize(_bufferSize).y * 0.5;
 
   if (livingGarden) {
-    livingGarden.material.uniforms.uSharpenAmount.value =
-      canvas.clientWidth < 720 ? GARDEN_VIDEO.sharpenMobile : GARDEN_VIDEO.sharpenDesktop;
+    livingGarden.material.uniforms.uSharpenAmount.value = pickSharpenAmount(canvas.clientWidth);
   }
 
   labelMetricsDirty = true;   // type size changes across breakpoints

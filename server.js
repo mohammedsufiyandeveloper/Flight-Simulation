@@ -68,6 +68,7 @@ const MIME_TYPES = {
   '.json': 'application/json',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
+  '.webp': 'image/webp',
 };
 
 const server = http.createServer((req, res) => {
