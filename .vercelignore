@@ -6,5 +6,7 @@ Thumbs.db
 .vercel
 .env*
 
-# Ignore the large video file (we load it via GitHub LFS CDN in production)
-assets/playbalst675464564646.mp4
+# Ignore the large video files — the garden video is served from the
+# Cloudflare R2 public bucket in production (see GARDEN_VIDEO_SOURCES in
+# main.js), so no MP4 needs to be part of the deployment bundle.
+assets/*.mp4

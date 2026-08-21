@@ -1,8 +1,9 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { presignR2Get, GARDEN_VIDEO_KEY } = require('./api/_r2.js');
 
-const PORT = 8080;
+const PORT = Number(process.env.PORT) || 8080;
 
 /** Minimal .env loader — no dotenv dependency for a project with none installed. */
 function loadEnv(file) {
@@ -57,6 +58,23 @@ async function handleWindRequest(res) {
   }
 }
 
+/**
+ * Local-dev twin of api/garden-video.js — redirects to a presigned R2 URL
+ * for the garden render. See that file for why the video isn't served from
+ * disk. Vercel runs the api/ version in production; this route only exists
+ * so `npm start` behaves identically.
+ */
+function handleGardenVideoRequest(res) {
+  try {
+    const url = presignR2Get({ ...env, ...process.env }, GARDEN_VIDEO_KEY, 6 * 60 * 60);
+    res.writeHead(302, { Location: url, 'Cache-Control': 'private, max-age=3600' });
+    res.end();
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: String(err) }));
+  }
+}
+
 const MIME_TYPES = {
   '.html': 'text/html',
   '.css': 'text/css',
@@ -74,13 +92,20 @@ const MIME_TYPES = {
 const server = http.createServer((req, res) => {
   console.log(`${req.method} ${req.url}`);
 
-  if (req.url.split('?')[0] === '/api/wind') {
+  const route = req.url.split('?')[0];
+
+  if (route === '/api/wind') {
     handleWindRequest(res);
     return;
   }
 
+  if (route === '/api/garden-video') {
+    handleGardenVideoRequest(res);
+    return;
+  }
+
   // Normalize URL path to prevent directory traversal
-  let filePath = req.url.split('?')[0];
+  let filePath = route;
   if (filePath === '/') {
     filePath = '/index.html';
   }

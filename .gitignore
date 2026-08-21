@@ -5,7 +5,16 @@ Thumbs.db
 .vercel
 .env*
 
-# Source butterfly render frames (57 x 1920x1080 PNGs, ~46MB) — never
-# meant to ship. assets/butterfly_atlas.webp is the packed atlas derived
-# from these that the app actually loads.
+# Large media never belongs in this repo — assets/*.mp4 routes into Git LFS
+# and these would exhaust the quota. Everything below now lives in Cloudflare
+# R2 under the flight-simulation/ prefix instead; the app streams the video
+# from there via /api/garden-video (see GARDEN_VIDEO_URL in main.js).
+#
+#   flight-simulation/4k_render_final_001.mp4          the 4K garden master
+#   flight-simulation/source/ASAS0063_source_frames.zip  butterfly frames
+#
+# The ASAS0063 frames are the source that assets/butterfly_atlas.webp — the
+# packed atlas the app actually loads — was derived from. They are only
+# needed to re-pack the atlas.
+assets/*.mp4
 assets/ASAS0063/

@@ -49,7 +49,7 @@ const TERMINAL = new THREE.Vector3(1.18, -0.18, 0.30);
 const TERMINAL_T1 = new THREE.Vector3(-1.18, -0.18, 0.30);
 
 /**
- * The garden video (gardenanimation.mp4) doesn't share the plane's aspect —
+ * The garden video (see GARDEN_VIDEO_URL) doesn't share the plane's aspect —
  * these control how its UVs are fitted onto the plane in the shader (see
  * fitContainUv in GARDEN_FRAG) without touching any world coordinate above.
  *
@@ -66,14 +66,13 @@ const GARDEN_VIDEO = {
   offsetY: 0.0,
   sharpenMobile: 0.0,
   sharpenDesktop: 0.28,
-  // The source video is 1920×1080. Stretched across a large-format display
+  // The source video is 3840×2160. Stretched across a large-format display
   // (a 55"+ TV or an interactive touch panel used as a monitor) that's a
-  // real, low pixel density — an 86" 4K panel is ~51 PPI, under half this
-  // video's native pixel count — so the bilinear softness is worse there
-  // than on a normal desktop monitor at the same CSS width. A stronger
-  // unsharp-mask pass is the one lever that actually helps; it can't
-  // invent detail the source doesn't have, but it meaningfully improves
-  // perceived crispness.
+  // real, low pixel density — an 86" 4K panel is ~51 PPI — and the
+  // contain-fit rescale plus bilinear sampling softens it further. A
+  // stronger unsharp-mask pass is the one lever that actually helps; it
+  // can't invent detail the source doesn't have, but it meaningfully
+  // improves perceived crispness.
   sharpenLarge: 0.48
 };
 
@@ -568,70 +567,10 @@ class LivingGarden {
   }
 }
 
-/** Read a PNG's dimensions from its IHDR chunk without decoding the pixels. */
-async function readPngSize(blob) {
-  const head = new DataView(await blob.slice(0, 24).arrayBuffer());
-  if (head.byteLength < 24 || head.getUint32(0) !== 0x89504e47) return null;
-  return { width: head.getUint32(16), height: head.getUint32(20) };
-}
-
 /**
- * Fallback path only — used when the garden video can't load. garden.png is
- * 7805×6640, 207 MB of decoded RGBA and wider than the 4096 MAX_TEXTURE_SIZE
- * that plenty of mobile GPUs report. Uploaded as-is it costs a quarter-
- * gigabyte of VRAM on desktop and fails outright on a phone, leaving a black
- * garden. The plane is never drawn wider than ~1300 CSS px, so we decode
- * straight to a GPU-safe size and upload that instead.
- */
-async function loadGardenTexture(url) {
-  const limit = Math.min(
-    renderer.capabilities.maxTextureSize,
-    window.innerWidth < 720 ? 1600 : 2560
-  );
-
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`garden.png → HTTP ${response.status}`);
-  const blob = await response.blob();
-
-  // Read the header first so we can ask the decoder for a small bitmap directly,
-  // instead of materialising all 207 MB and shrinking it afterwards.
-  const size = await readPngSize(blob);
-  const scale = size ? Math.min(1, limit / Math.max(size.width, size.height)) : 1;
-
-  let source;
-  if (size && scale < 1) {
-    const opts = {
-      resizeWidth: Math.round(size.width * scale),
-      resizeHeight: Math.round(size.height * scale),
-      resizeQuality: "high"
-    };
-    // Older Safari ignores or rejects the resize options; the drawImage below
-    // still scales correctly, it just pays for the full decode first.
-    source = await createImageBitmap(blob, opts).catch(() => createImageBitmap(blob));
-  } else {
-    source = await createImageBitmap(blob);
-  }
-
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round((size?.width ?? source.width) * scale));
-  canvas.height = Math.max(1, Math.round((size?.height ?? source.height) * scale));
-
-  const ctx = canvas.getContext("2d");
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-  source.close?.();
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  return texture;
-}
-
-/**
- * Loads assets/gardenanimation.mp4 as a looping, muted THREE.VideoTexture —
- * the primary garden source. garden.png stays as the poster/fallback for
- * browsers that block autoplay or when the video fails to load.
+ * Loads the garden video as a looping, muted THREE.VideoTexture — the only
+ * source the garden layer has. Rejects if the URL won't load, which is what
+ * lets loadGarden() give up cleanly and leave the rest of the scene running.
  */
 async function loadGardenVideoTexture(url) {
   const video = document.createElement("video");
@@ -670,12 +609,17 @@ async function loadGardenVideoTexture(url) {
   }
 
   // Belt-and-suspenders for an uninterrupted loop: video.loop already
-  // replays at the end, but some browsers pause background/off-DOM video
-  // (this element is never inserted into the page, only sampled as a
-  // texture) under memory or battery pressure. Resume immediately whenever
-  // that happens instead of leaving the garden frozen on one frame.
+  // replays at the end, but browsers also pause this element on their own —
+  // it is 1px and transparent, so it reads as offscreen — under memory or
+  // battery pressure, and whenever the tab goes to the background.
+  //
+  // Only fight that while the tab is actually visible. Calling play() on a
+  // hidden tab just loses a race with the browser's own suspend, and the
+  // resulting play/pause churn makes the decoder slower to come back than if
+  // it had been left alone. Resuming is instead deferred to the
+  // visibilitychange below, which fires once, at the moment it can succeed.
   video.addEventListener("pause", () => {
-    video.play().catch(() => { });
+    if (document.visibilityState === "visible") video.play().catch(() => { });
   });
 
   const texture = new THREE.VideoTexture(video);
@@ -687,13 +631,63 @@ async function loadGardenVideoTexture(url) {
   texture.generateMipmaps = false;
   texture.needsUpdate = true;
 
-  // Override the update method to block texture uploads to the GPU during seeks/loops.
-  // This prevents Chrome from uploading blurry keyframes at the loop boundary.
+  // Gate GPU uploads on real decoded frames, not on animation frames.
+  //
+  // At 3840×2160 one frame is ~33 MB of RGBA. THREE re-uploads whenever
+  // needsUpdate is set, and update() runs once per render tick — so flagging
+  // it unconditionally pushes ~33 MB at display refresh (60 Hz or higher)
+  // for a source that only produces 30 new frames a second. Half or more of
+  // that bus traffic re-sends a frame the GPU already holds.
+  //
+  // requestVideoFrameCallback fires once per decoded frame, so it flags the
+  // texture only when there is genuinely something new. Firefox doesn't
+  // implement it yet and falls back to the old every-tick behaviour.
+  //
+  // Uploads stay suppressed mid-seek either way, which is what stops Chrome
+  // showing a blurry keyframe at the loop boundary.
+  const hasFrameCallback = typeof video.requestVideoFrameCallback === "function";
+  let frameReady = true;
+  let lastFrameFlag = performance.now();
+
+  if (hasFrameCallback) {
+    const onDecodedFrame = () => {
+      frameReady = true;
+      lastFrameFlag = performance.now();
+      video.requestVideoFrameCallback(onDecodedFrame);
+    };
+    video.requestVideoFrameCallback(onDecodedFrame);
+  }
+
   texture.update = function () {
-    if (video.readyState >= video.HAVE_CURRENT_DATA && !video.seeking) {
-      this.needsUpdate = true;
+    if (video.readyState < video.HAVE_CURRENT_DATA || video.seeking) return;
+
+    if (hasFrameCallback && !frameReady) {
+      // rVFC only fires for frames the compositor actually presents, so it
+      // goes silent in a background tab — and can stay silent coming back if
+      // the browser suspended and re-armed the decoder underneath us. Without
+      // this escape hatch the garden freezes on whichever frame was uploaded
+      // last. Silence longer than ~250ms while playing means the callback
+      // chain is no longer driving us, so upload anyway; a callback firing
+      // again refreshes lastFrameFlag and hands control back to it.
+      if (video.paused || performance.now() - lastFrameFlag < 250) return;
     }
+
+    frameReady = false;
+    this.needsUpdate = true;
   };
+
+  // Coming back from another tab or app: the browser may have paused this
+  // element, and nothing was composited while it was hidden, so rVFC has
+  // been silent and the texture still holds whatever frame was current when
+  // the tab went away. Resume playback and force one upload so the garden is
+  // live again immediately rather than showing a stale frame until the next
+  // decode lands.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    if (video.paused) video.play().catch(() => { });
+    frameReady = true;
+    lastFrameFlag = performance.now();
+  });
 
   const mediaAspect = video.videoWidth / video.videoHeight;
   const mediaResolution = [video.videoWidth, video.videoHeight];
@@ -905,9 +899,22 @@ function placeGroundedFlower(object, x, y, z, diameter) {
   object.updateMatrixWorld(true);
 }
 
+/**
+ * Where mainflower.glb is served from. It is NOT currently in this repo or
+ * in R2, so the terminal blooms — the hero structure of the whole metaphor —
+ * do not render. Point this at the .glb (locally under assets/, or a URL) to
+ * bring them back; everything downstream of the load already works.
+ */
+const MAINFLOWER_URL = "";
+
 /** Terminal 1 + Terminal 2 blooms — see the metaphor map at the top of this file. */
 function loadTerminalFlowers() {
-  loadGlb("")
+  if (!MAINFLOWER_URL) {
+    console.warn("[Flight Garden] MAINFLOWER_URL is unset — terminal blooms stay empty. The .glb is missing from the project.");
+    return;
+  }
+
+  loadGlb(MAINFLOWER_URL)
     .then((gltf) => {
       const t1 = gltf.scene;
       const t2 = gltf.scene.clone(true);
@@ -939,36 +946,57 @@ function loadTerminalFlowers() {
     });
 }
 
-loadGardenVideoTexture("assets/renderart.mp4")
-  .then(({ texture, video, mediaAspect, mediaResolution }) => {
+/**
+ * Where the garden render comes from. It is never served from this repo:
+ * at 1.2 GB the file belongs in object storage, so it lives in Cloudflare
+ * R2 and nothing under assets/ backs it up.
+ *
+ * By default the app asks its own /api/garden-video, which 302s to a
+ * short-lived presigned URL (see api/garden-video.js). That keeps the
+ * bucket private and the R2 credentials server-side.
+ *
+ * Setting R2_PUBLIC_BASE to the bucket's public base — its "Public
+ * Development URL", https://pub-<hash>.r2.dev, or a custom domain bound to
+ * the bucket — skips the redirect and streams straight off R2's CDN
+ * instead, which caches better. Either way the bucket's CORS policy must
+ * allow this app's origin: the VideoTexture below is uploaded to the GPU,
+ * so without CORS headers the WebGL context is tainted and the upload
+ * throws.
+ *
+ * What streams is the master exactly as rendered — 3840×2160 @ 30fps,
+ * 80 Mbps, audio track intact, no re-encode. That is a mastering bitrate
+ * rather than a streaming one, so the trade is deliberate: the garden is
+ * pixel-identical to the render, at the cost of a long initial buffer on
+ * slow connections and ~1.2 GB of egress per viewer. The file carries its
+ * moov atom at the front, so playback at least begins before the whole
+ * download finishes.
+ */
+const R2_PUBLIC_BASE = "";
+const GARDEN_VIDEO_URL = R2_PUBLIC_BASE
+  ? `${R2_PUBLIC_BASE}/flight-simulation/4k_render_final_001.mp4`
+  : "/api/garden-video";
+
+/**
+ * Brings up the garden layer. If the video can't load at all — offline, a
+ * CORS misconfiguration, R2 unreachable — the scene keeps rendering without
+ * a garden floor rather than failing outright; every other layer (blooms,
+ * flights, HUD) is independent of it.
+ */
+async function loadGarden() {
+  try {
+    const { texture, video, mediaAspect, mediaResolution } = await loadGardenVideoTexture(GARDEN_VIDEO_URL);
     livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
     gardenVideoEl = video;
     startWindDrivenVideoSpeed();
     resize();
-  })
-  .catch(async (err) => {
-    console.warn("[Flight Garden] Local playbalst675464564646.mp4 unavailable, trying remote LFS URL...", err);
-    try {
-      const remoteUrl = "https://media.githubusercontent.com/media/mohammedsufiyandeveloper/Flight-Simulation/main/assets/playbalst675464564646.mp4";
-      const { texture, video, mediaAspect, mediaResolution } = await loadGardenVideoTexture(remoteUrl);
-      livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
-      gardenVideoEl = video;
-      startWindDrivenVideoSpeed();
-      resize();
-    } catch (remoteErr) {
-      console.warn("[Flight Garden] Remote playbalst675464564646.mp4 also unavailable, falling back to garden.png.", remoteErr);
-      try {
-        const texture = await loadGardenTexture("assets/garden.png");
-        livingGarden = new LivingGarden(texture);
-        resize();
-      } catch (pngErr) {
-        console.warn("[Flight Garden] Garden fallback texture unavailable — scene will render without a garden layer.", pngErr);
-      }
-    }
-  })
-  .finally(() => {
-    beginIntro();
-  });
+  } catch (err) {
+    console.warn(`[Flight Garden] Garden video unavailable at ${GARDEN_VIDEO_URL} — rendering without a garden layer.`, err);
+  }
+}
+
+loadGarden().finally(() => {
+  beginIntro();
+});
 
 loadTerminalFlowers();
 
@@ -2609,7 +2637,7 @@ function updateParallax(dt, elapsed) {
 /**
  * Frame the *garden*, not the plane.
  *
- * Most of garden.png is black margin around the white shadow box. Fitting the
+ * Most of the render is black margin around the white shadow box. Fitting the
  * whole plane wastes the viewport — badly so on a phone. Instead we contain a
  * focus box drawn around the artwork and let the dead margin crop off-screen;
  * since the margin is black and so is the clear colour, the seam is invisible.
@@ -2704,6 +2732,57 @@ resize();
 const clock = new THREE.Clock();
 let elapsed = 0;
 
+/**
+ * Diagnostics for "the video lags" — load the page with ?debug=video.
+ *
+ * The two causes look identical on screen but have opposite fixes, and this
+ * tells them apart:
+ *
+ *   dropped frames high, buffer healthy  → the GPU/decoder can't keep up.
+ *       A 3840×2160 frame is ~33 MB per texture upload; the cost is
+ *       resolution, so a smaller render is what helps.
+ *   buffer near zero, dropped frames low → the stream is starving playback.
+ *       At 80 Mbps a browser's byte-capped media buffer only holds ~3s, so
+ *       the cost is bitrate and a lower-bitrate encode is what helps.
+ */
+let frameCount = 0;
+function startVideoDiagnostics() {
+  if (!new URLSearchParams(location.search).has("debug")) return;
+
+  let lastReport = performance.now();
+  setInterval(() => {
+    const now = performance.now();
+    const fps = frameCount / ((now - lastReport) / 1000);
+    frameCount = 0;
+    lastReport = now;
+
+    if (!gardenVideoEl) {
+      console.log(`[diag] render ${fps.toFixed(1)} fps — no video element yet`);
+      return;
+    }
+
+    const v = gardenVideoEl;
+    const q = v.getVideoPlaybackQuality?.();
+    let ahead = 0;
+    for (let i = 0; i < v.buffered.length; i++) {
+      if (v.currentTime >= v.buffered.start(i) && v.currentTime <= v.buffered.end(i)) {
+        ahead = v.buffered.end(i) - v.currentTime;
+        break;
+      }
+    }
+    const dropped = q ? q.droppedVideoFrames : 0;
+    const total = q ? q.totalVideoFrames : 0;
+    const dropPct = total ? (dropped / total) * 100 : 0;
+
+    console.log(
+      `[diag] render ${fps.toFixed(1)} fps | buffered ahead ${ahead.toFixed(1)}s | ` +
+      `dropped ${dropped}/${total} (${dropPct.toFixed(1)}%) | ` +
+      `readyState ${v.readyState} | paused ${v.paused} | rate ${v.playbackRate.toFixed(2)}`
+    );
+  }, 2000);
+}
+startVideoDiagnostics();
+
 function render() {
   if (composer) composer.render();
   else renderer.render(scene, camera);
@@ -2711,6 +2790,7 @@ function render() {
 
 function animate() {
   requestAnimationFrame(animate);
+  frameCount++;
 
   const dt = Math.min(clock.getDelta(), MAX_DT);
   elapsed += dt;
