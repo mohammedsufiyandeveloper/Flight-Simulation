@@ -1024,10 +1024,28 @@ function randomEdgePoint(z = ALT.cruise) {
  * bloom — flights land on an actual petal, like a real terminal's gates.
  * T1 (domestic pier) gets fewer petals than T2 (hero, international).
  */
-const PETAL_LANDING_COUNT = { T1: 4, T2: 6 };
-// Fraction of maxR each terminal's ring sits at — mid-petal, not center, not
-// the rim. Per-terminal so T2's circle can grow without touching T1's.
-const PETAL_LANDING_RADIUS_FRAC = { T1: 0.62, T2: 0.85 };
+// Together these must exceed MAX_BUTTERFLIES, or a busy bloom runs out of
+// perches and flights start doubling up (see claimLandingSpot).
+const PETAL_LANDING_COUNT = { T1: 6, T2: 9 };
+
+// Perches sit in a band across the bloom rather than on one ring: as a
+// fraction of maxR, inner keeps them off the flower's core, outer keeps them
+// off the rim. A band gives the sunflower placement below two dimensions to
+// spread across, so spots stay far apart without crowding a single circle.
+const PETAL_LANDING_BAND = {
+  T1: { inner: 0.50, outer: 1.00 },
+  T2: { inner: 0.50, outer: 1.00 }
+};
+
+// These are dimensioned against the butterfly itself. At its largest a parked
+// one spans 0.30 × 0.48 × BUTTERFLY_SCALE × 1.08 ≈ 0.183 world units, and the
+// counts and band above put the closest pair of perches ~0.21 apart. Jitter
+// displaces two neighbours by at most 2·j·√2 ≈ 0.023 toward each other, which
+// leaves ~0.19 — still clear of a wingspan. Raising the jitter or the counts
+// without redoing that arithmetic is what puts wings back on top of wings.
+const PETAL_LANDING_JITTER = 0.008;   // per-landing wobble, breaks up the lattice
+const PETAL_SHARE_OFFSET = 0.062;     // step aside when a perch is already taken
+const PETAL_SHARE_LIFT = 0.004;       // and sit a hair higher, so no z-fighting
 
 /**
  * Per-group nudge, independent of the flower's own position (TERMINAL_T1 /
@@ -1039,6 +1057,20 @@ const PETAL_LANDING_OFFSET = {
   T2: { x: 0.2, y: 0.3 }
 };
 
+/** ~137.5°, the angle between consecutive florets in a real sunflower head. */
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+/**
+ * Perches laid out the way a flower head actually packs its florets: step the
+ * golden angle each time and push the radius out as sqrt(i), which is what
+ * keeps real seed heads evenly dense from core to rim.
+ *
+ * The point here is that no two perches line up. Stepping by a whole fraction
+ * of a turn — as an evenly divided ring does — puts every spot on a spoke, and
+ * a dozen butterflies sitting on spokes reads as a clock face, not a garden.
+ * The golden angle never repeats, so the arrangement looks scattered while
+ * still being near-perfectly spaced.
+ */
 const PETAL_LANDING_SPOTS = (() => {
   const maxR = { T1: 0.38, T2: 0.46 };
   const spots = {};
@@ -1046,9 +1078,14 @@ const PETAL_LANDING_SPOTS = (() => {
     const center = terminal === "T1" ? TERMINAL_T1 : TERMINAL;
     const offset = PETAL_LANDING_OFFSET[terminal];
     const count = PETAL_LANDING_COUNT[terminal];
-    const r = maxR[terminal] * PETAL_LANDING_RADIUS_FRAC[terminal];
+    const band = PETAL_LANDING_BAND[terminal];
+    // Phase the two blooms differently so they aren't mirror images.
+    const phase = terminal === "T1" ? 0.7 : 2.1;
+
     spots[terminal] = Array.from({ length: count }, (_, i) => {
-      const angle = (i / count) * Math.PI * 2;
+      const t = Math.sqrt((i + 0.5) / count);          // even areal density
+      const r = maxR[terminal] * lerp(band.inner, band.outer, t);
+      const angle = i * GOLDEN_ANGLE + phase;
       return new THREE.Vector3(
         center.x + offset.x + Math.cos(angle) * r,
         center.y + offset.y + Math.sin(angle) * r,
@@ -1059,31 +1096,64 @@ const PETAL_LANDING_SPOTS = (() => {
   return spots;
 })();
 
-/** Which petal index is currently taken, per terminal — one butterfly per petal at a time. */
+/**
+ * How many butterflies are on each perch. A count rather than a flag: when a
+ * bloom is completely full the extras have to go somewhere, and knowing how
+ * many are already there is what lets claimLandingSpot fan them out instead
+ * of dropping them on top of each other.
+ */
 const petalOccupied = {
-  T1: new Array(PETAL_LANDING_COUNT.T1).fill(false),
-  T2: new Array(PETAL_LANDING_COUNT.T2).fill(false)
+  T1: new Array(PETAL_LANDING_COUNT.T1).fill(0),
+  T2: new Array(PETAL_LANDING_COUNT.T2).fill(0)
 };
 
 /**
- * Claims a free petal on `terminal`, marking it occupied. If every petal is
- * already taken (more inbound flights than petals), falls back to a random
- * occupied one rather than blocking — a flight briefly sharing a busy petal
- * reads better than one stuck stalling in midair forever.
+ * Claims the emptiest perch on `terminal`, breaking ties at random so a busy
+ * bloom fills out evenly instead of always loading the low indices first.
+ *
+ * Every landing gets a small random wobble, so a butterfly returning to a
+ * perch another one used earlier doesn't land on the exact same pixel — the
+ * arrangement stays alive across the whole simulation rather than snapping
+ * back to a fixed lattice.
+ *
+ * If the bloom is genuinely full — more domestic arrivals than T1 has perches
+ * — the newcomer steps aside by PETAL_SHARE_OFFSET at the golden angle and
+ * sits a hair higher, so it perches *beside* the occupant. Two butterflies
+ * sharing a crowded petal looks like a real flower; two occupying identical
+ * coordinates looks like a bug.
  */
 function claimLandingSpot(terminal) {
   const occ = petalOccupied[terminal];
-  const free = [];
-  for (let i = 0; i < occ.length; i++) if (!occ[i]) free.push(i);
-  const index = free.length ? pick(free) : randInt(0, occ.length - 1);
-  occ[index] = true;
-  return { index, position: PETAL_LANDING_SPOTS[terminal][index].clone() };
+
+  let min = Infinity;
+  for (let i = 0; i < occ.length; i++) if (occ[i] < min) min = occ[i];
+  const tied = [];
+  for (let i = 0; i < occ.length; i++) if (occ[i] === min) tied.push(i);
+
+  const index = pick(tied);
+  const share = occ[index];
+  occ[index] += 1;
+
+  const position = PETAL_LANDING_SPOTS[terminal][index].clone();
+
+  if (share > 0) {
+    const a = share * GOLDEN_ANGLE;
+    position.x += Math.cos(a) * PETAL_SHARE_OFFSET;
+    position.y += Math.sin(a) * PETAL_SHARE_OFFSET;
+    position.z += share * PETAL_SHARE_LIFT;
+  }
+
+  position.x += rand(-PETAL_LANDING_JITTER, PETAL_LANDING_JITTER);
+  position.y += rand(-PETAL_LANDING_JITTER, PETAL_LANDING_JITTER);
+
+  return { index, position };
 }
 
-/** Frees a previously claimed petal so another flight can land on it. */
+/** Frees a previously claimed perch so another flight can land on it. */
 function releaseLandingSpot(terminal, index) {
   if (index == null) return;
-  petalOccupied[terminal][index] = false;
+  const occ = petalOccupied[terminal];
+  occ[index] = Math.max(0, occ[index] - 1);
 }
 
 /**
@@ -1862,6 +1932,10 @@ class Butterfly {
 
     // personality — small variances so no two flights read identically
     this.flutter = rand(0.85, 1.25);
+    // Real butterflies are not all one size. Kept narrow: enough to break up
+    // a row of identical silhouettes, not enough to read as depth or to make
+    // one flight look more important than another.
+    this.sizeVariation = rand(0.92, 1.08);
     this.wanderSeed = rand(0, Math.PI * 2);
     this.wanderAmp = rand(0.012, 0.030);
     this.lane = rand(-0.09, 0.09);   // lateral offset so flight paths spread apart
@@ -1953,6 +2027,27 @@ class Butterfly {
     this.opacity = 0;
   }
 
+  /**
+   * Which way a perched butterfly faces.
+   *
+   * Not uniformly random: a real butterfly settles facing away from the
+   * flower it is standing on, wings clear of the bloom. Fully random headings
+   * put a third of them nose-first into the centre, which reads as scattered
+   * litter rather than as something alive that chose to land there.
+   *
+   * So face outward from the bloom's centre, then scatter by up to ~50° so
+   * they don't all splay out in a perfect starburst either.
+   */
+  restingHeading() {
+    const center = this.terminal === "T1" ? TERMINAL_T1 : TERMINAL;
+    const offset = PETAL_LANDING_OFFSET[this.terminal];
+    const outward = Math.atan2(
+      this.landingSpot.y - (center.y + offset.y),
+      this.landingSpot.x - (center.x + offset.x)
+    );
+    return outward + rand(-0.88, 0.88);
+  }
+
   enterParked(instant = false) {
     this.state = "parked";
     this.flight.kind = "arrival";
@@ -1961,7 +2056,7 @@ class Butterfly {
     this.mesh.position.copy(this.position);
     this.speed = 0;
     this.dwellTimer = rand(11, 22) / sim.intensity;
-    this.restHeading = rand(0, Math.PI * 2);
+    this.restHeading = this.restingHeading();
 
     if (instant) {
       this.opacity = 1;
@@ -2144,7 +2239,7 @@ class Butterfly {
 
     // altitude reads as scale: higher flights sit smaller against the garden
     const altitude = clamp((this.position.z - ALT.ground) / (ALT.cruise - ALT.ground), 0, 1);
-    this.mesh.scale.setScalar(0.48 * BUTTERFLY_SCALE * (1 - altitude * 0.22));
+    this.mesh.scale.setScalar(0.48 * BUTTERFLY_SCALE * this.sizeVariation * (1 - altitude * 0.22));
 
     this.mesh.rotation.z = this.heading - Math.PI / 2;
     this.mesh.rotation.y = this.bank;
