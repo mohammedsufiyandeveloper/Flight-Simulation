@@ -1,7 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { presignR2Get, GARDEN_VIDEO_KEY } = require('./api/_r2.js');
+const { presignR2Get, resolveVideoKey } = require('./api/_r2.js');
 
 const PORT = Number(process.env.PORT) || 8080;
 
@@ -51,7 +51,14 @@ async function handleWindRequest(res) {
     if (!apiRes.ok) throw new Error(`weatherapi → HTTP ${apiRes.status}`);
     const data = await apiRes.json();
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ kph: data.current.wind_kph }));
+
+    // kph drives playback speed in every scene; temp_c additionally picks
+    // which of the weather scene's four renders is on screen.
+    res.end(JSON.stringify({
+      kph: data.current.wind_kph,
+      tempC: data.current.temp_c,
+      condition: data.current.condition && data.current.condition.text,
+    }));
   } catch (err) {
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: String(err) }));
@@ -64,9 +71,16 @@ async function handleWindRequest(res) {
  * disk. Vercel runs the api/ version in production; this route only exists
  * so `npm start` behaves identically.
  */
-function handleGardenVideoRequest(res) {
+function handleGardenVideoRequest(res, id) {
+  const key = resolveVideoKey(id);
+  if (!key) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: `unknown video id: ${id}` }));
+    return;
+  }
+
   try {
-    const url = presignR2Get({ ...env, ...process.env }, GARDEN_VIDEO_KEY, 6 * 60 * 60);
+    const url = presignR2Get({ ...env, ...process.env }, key, 6 * 60 * 60);
     res.writeHead(302, { Location: url, 'Cache-Control': 'private, max-age=3600' });
     res.end();
   } catch (err) {
@@ -100,7 +114,8 @@ const server = http.createServer((req, res) => {
   }
 
   if (route === '/api/garden-video') {
-    handleGardenVideoRequest(res);
+    const id = new URL(req.url, `http://${req.headers.host || 'localhost'}`).searchParams.get('id');
+    handleGardenVideoRequest(res, id);
     return;
   }
 

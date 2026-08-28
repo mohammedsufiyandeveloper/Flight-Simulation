@@ -81,7 +81,42 @@ function presignR2Get(env, key, expiresInSeconds = 6 * 60 * 60) {
   return `https://${host}${canonicalPath}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
-/** The garden render's key in R2 — see GARDEN_VIDEO_URL in main.js. */
-const GARDEN_VIDEO_KEY = 'flight-simulation/4k_render_final_001.mp4';
+/**
+ * Every video the app is allowed to stream, keyed by the short id the browser
+ * asks for (/api/garden-video?id=<id>).
+ *
+ * This is an allowlist, not a lookup convenience. The endpoint signs whatever
+ * key it is handed, so accepting an arbitrary key straight off the query
+ * string would let anyone holding the URL mint a signed link to *any* object
+ * in the bucket. Ids come in, keys go out — never the other way round.
+ *
+ * The browser-side half of this table is SCENES in main.js; the ids must
+ * match. The three weather clips are the blue/green/red renders, one per
+ * temperature band (see SCENES.weather.art.bands in main.js).
+ */
+const VIDEO_KEYS = {
+  'flight-garden': 'flight-simulation/4k_render_final_001.mp4',
 
-module.exports = { presignR2Get, GARDEN_VIDEO_KEY };
+  'weather-cold': 'flight-simulation/weather_cold.mp4',
+  'weather-mild': 'flight-simulation/weather_mild.mp4',
+  'weather-warm': 'flight-simulation/weather_warm.mp4',
+};
+
+const DEFAULT_VIDEO_ID = 'flight-garden';
+
+/** Resolves a request's ?id= to an R2 key, or null if it is not allowlisted. */
+function resolveVideoKey(id) {
+  if (!id) return VIDEO_KEYS[DEFAULT_VIDEO_ID];
+  return Object.prototype.hasOwnProperty.call(VIDEO_KEYS, id) ? VIDEO_KEYS[id] : null;
+}
+
+/** The flight render's key — kept for anything still asking for it by name. */
+const GARDEN_VIDEO_KEY = VIDEO_KEYS[DEFAULT_VIDEO_ID];
+
+module.exports = {
+  presignR2Get,
+  resolveVideoKey,
+  VIDEO_KEYS,
+  DEFAULT_VIDEO_ID,
+  GARDEN_VIDEO_KEY,
+};

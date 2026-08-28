@@ -45,6 +45,15 @@
   <main class="hud hud-active">
     <div class="panel hud-panel" id="hudPanel">
 
+      <!-- Which visualization is on screen -->
+      <section class="hp-block scene" id="scenePanel">
+        <h2 class="eyebrow">Visualization</h2>
+        <label class="select-wrap">
+          <span class="sr-only">Select visualization</span>
+          <select id="sceneSelect"></select>
+        </label>
+      </section>
+
       <!-- Tower / airport selector -->
       <section class="hp-block tower" id="towerPanel">
         <div class="tower-head">
@@ -76,6 +85,18 @@
         <div class="stat" data-kind="active">
           <span class="stat-value" id="statActive">0</span>
           <span class="stat-label">Active</span>
+        </div>
+      </section>
+
+      <!-- Live weather readout (weather scene only) -->
+      <section class="hp-block stats" id="weatherPanel" hidden>
+        <div class="stat" data-kind="arrival">
+          <span class="stat-value" id="statTemp">&mdash;</span>
+          <span class="stat-label">Temp &deg;C</span>
+        </div>
+        <div class="stat" data-kind="departure">
+          <span class="stat-value" id="statWind">&mdash;</span>
+          <span class="stat-label">Wind km/h</span>
         </div>
       </section>
 

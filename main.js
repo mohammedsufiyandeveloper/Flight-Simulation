@@ -544,6 +544,21 @@ class LivingGarden {
   }
 
   /**
+   * Points the plane at a different video without rebuilding anything.
+   *
+   * Scene switches and the weather scene's temperature bands both land here,
+   * so the swap has to carry the new media's own shape with it: a clip of a
+   * different aspect ratio must re-fit, or it would be stretched to the
+   * outgoing one's proportions.
+   */
+  setMedia(texture, mediaAspect, mediaResolution) {
+    const u = this.material.uniforms;
+    u.uMap.value = texture;
+    u.uMediaAspect.value = mediaAspect;
+    u.uVideoResolution.value.set(mediaResolution[0], mediaResolution[1]);
+  }
+
+  /**
    * Organic timing: three incommensurate sines never repeat on a beat, so the
    * swell never feels like a metronome the way a single sin(t) does.
    */
@@ -682,71 +697,245 @@ async function loadGardenVideoTexture(url) {
   // the tab went away. Resume playback and force one upload so the garden is
   // live again immediately rather than showing a stale frame until the next
   // decode lands.
-  document.addEventListener("visibilitychange", () => {
+  const onVisibility = () => {
     if (document.visibilityState !== "visible") return;
     if (video.paused) video.play().catch(() => { });
     frameReady = true;
     lastFrameFlag = performance.now();
-  });
+  };
+  document.addEventListener("visibilitychange", onVisibility);
 
   const mediaAspect = video.videoWidth / video.videoHeight;
   const mediaResolution = [video.videoWidth, video.videoHeight];
-  return { texture, video, mediaAspect, mediaResolution };
+
+  /**
+   * Tears the element down completely. Scenes swap videos at runtime, so a
+   * discarded one that keeps its listeners — and keeps decoding — would stack
+   * up a 4K decoder per switch. Detaching the source is what actually frees
+   * the decoder; removing the node alone does not.
+   */
+  const dispose = () => {
+    document.removeEventListener("visibilitychange", onVisibility);
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.remove();
+    texture.dispose();
+  };
+
+  return { texture, video, mediaAspect, mediaResolution, dispose };
 }
+
+/* =================================================================
+   6B · SCENES — a data source bound to an artwork
+   ---------------------------------------------------------------
+   The app is a player for visualizations, not one visualization. A
+   scene names where its numbers come from, which render(s) it draws
+   on, and what those numbers do to them. Everything below reads this
+   table; nothing downstream hard-codes "flight" or "weather".
+
+   To add one, copy the `template` block at the bottom, give it an id,
+   and add its video ids to VIDEO_KEYS in api/_r2.js so the presigner
+   will sign them. No engine code changes.
+   ================================================================= */
 
 /**
- * Ties the garden video's playback speed to Bengaluru's live wind. wind_kph
- * is mapped to a 0..1 "speed" value across [minKph, maxKph], then that 0..1
- * is mapped onto the video's playbackRate range (minRate/maxRate — currently
- * 1..1.1, so calm wind plays at normal speed and gusty wind nudges it only
- * slightly faster, never slower than real time).
+ * Where a video id resolves to a URL.
  *
- * The actual WeatherAPI.com call happens server-side (see /api/wind in
- * server.js), which reads the key from .env — it never ships to the
- * browser, unlike calling the weather API directly from this file.
+ * By default the app asks its own /api/garden-video?id=<id>, which 302s to a
+ * short-lived presigned R2 URL — that keeps the bucket private and the R2
+ * credentials server-side. Setting R2_PUBLIC_BASE to the bucket's public base
+ * (its "Public Development URL", https://pub-<hash>.r2.dev, or a custom
+ * domain bound to it) streams straight off R2's CDN instead, which caches
+ * better.
+ *
+ * Either way the bucket's CORS policy must allow this app's origin: the
+ * VideoTexture is uploaded to the GPU, so without CORS headers the WebGL
+ * context is tainted and the upload throws.
  */
-const WIND_API = {
-  minKph: 18,
-  maxKph: 38,
-  minRate: 1,
-  maxRate: 1.1,
-  pollMs: 5 * 60 * 1000 // real-time-enough without hammering the free-tier rate limit
+const R2_PUBLIC_BASE = "";
+
+/** Must mirror VIDEO_KEYS in api/_r2.js — that file is the security boundary. */
+const VIDEO_PATHS = {
+  "flight-garden": "flight-simulation/4k_render_final_001.mp4",
+  "weather-cold": "flight-simulation/weather_cold.mp4",
+  "weather-mild": "flight-simulation/weather_mild.mp4",
+  "weather-warm": "flight-simulation/weather_warm.mp4"
 };
 
-let gardenVideoEl = null;
+const ART = {
+  /**
+   * Rather than show a black plane, a scene whose clip will not load falls
+   * back to this one and says so in the console — a safety net for a bad
+   * signature or an object missing from the bucket.
+   *
+   * Set to null to disable the fallback and leave the plane empty instead.
+   */
+  fallbackVideoId: "flight-garden",
 
-/** Bengaluru's current wind speed in km/h, via this server's /api/wind proxy. */
-async function fetchWindKph() {
-  const res = await fetch("/api/wind");
-  if (!res.ok) throw new Error(`/api/wind → HTTP ${res.status}`);
-  const data = await res.json();
-  if (typeof data.kph !== "number") throw new Error(data.error || "/api/wind returned no kph");
-  return data.kph;
-}
+  url(videoId) {
+    // ?video=<url> still wins, for dropping in a local test render.
+    const override = new URLSearchParams(location.search).get("video");
+    if (override) return override;
 
-/** Maps a km/h wind reading onto the 0..1 range requested for the video-speed control. */
-function windToSpeed01(kph) {
-  return clamp((kph - WIND_API.minKph) / (WIND_API.maxKph - WIND_API.minKph), 0, 1);
-}
-
-async function updateVideoSpeedFromWind() {
-  if (!gardenVideoEl) return;
-  try {
-    const kph = await fetchWindKph();
-    const speed01 = windToSpeed01(kph);
-    gardenVideoEl.playbackRate = lerp(WIND_API.minRate, WIND_API.maxRate, speed01);
-    console.debug(
-      `[Flight Garden] wind ${kph.toFixed(1)} km/h → speed ${speed01.toFixed(2)} → playbackRate ${gardenVideoEl.playbackRate.toFixed(2)}`
-    );
-  } catch (err) {
-    console.warn("[Flight Garden] live wind lookup failed — video speed unchanged.", err);
+    if (R2_PUBLIC_BASE) {
+      const path = VIDEO_PATHS[videoId];
+      if (path) return R2_PUBLIC_BASE.replace(/\/$/, "") + "/" + path;
+    }
+    return `/api/garden-video?id=${encodeURIComponent(videoId)}`;
   }
+};
+
+/**
+ * Maps a live reading onto the video's playbackRate.
+ *
+ * Shared by every scene: a value is normalised to 0..1 across [min, max],
+ * then that 0..1 spans [minRate, maxRate]. At the defaults below, calm air
+ * plays at normal speed and a gusty day nudges it slightly faster — never
+ * slower than real time.
+ */
+function rateFrom(value, { min, max, minRate, maxRate }) {
+  return lerp(minRate, maxRate, clamp((value - min) / (max - min), 0, 1));
 }
 
-function startWindDrivenVideoSpeed() {
-  updateVideoSpeedFromWind();
-  setInterval(updateVideoSpeedFromWind, WIND_API.pollMs);
+const WIND_TO_RATE = { min: 18, max: 38, minRate: 1, maxRate: 1.1 };
+
+/**
+ * The live feed. One WeatherAPI call returns wind *and* temperature, so the
+ * weather scene costs no extra rate limit over the flight scene.
+ *
+ * The key never reaches the browser — /api/wind proxies it server-side (see
+ * server.js and api/wind.js), reading WEATHERAPI_KEY from the environment.
+ */
+async function fetchReading(endpoint) {
+  const res = await fetch(endpoint);
+  if (!res.ok) throw new Error(`${endpoint} → HTTP ${res.status}`);
+  const data = await res.json();
+  if (typeof data.kph !== "number") {
+    throw new Error(data.error || `${endpoint} returned no kph`);
+  }
+  return data;
 }
+
+const SCENES = {
+  /* ---------------------------------------------------------------
+     1 · FLIGHT — live air traffic as butterflies in a garden
+     --------------------------------------------------------------- */
+  flight: {
+    name: "Flight Garden",
+    blurb: "Butterflies are flights",
+
+    art: { mode: "single", videoId: "flight-garden" },
+
+    data: {
+      endpoint: "/api/wind",
+      pollMs: 5 * 60 * 1000,   // real-time enough without hammering the free tier
+      /** Wind sets how fast the garden breathes. */
+      apply(reading, ctx) {
+        const rate = rateFrom(reading.kph, WIND_TO_RATE);
+        ctx.setPlaybackRate(rate);
+        return { wind: reading.kph, rate };
+      }
+    },
+
+    /** Butterflies, terminal captions and the airport selector belong to this scene. */
+    flights: true,
+    panels: { tower: true, stats: true, legend: true, detail: true, weather: false }
+  },
+
+  /* ---------------------------------------------------------------
+     2 · WEATHER — temperature picks the render, wind sets its pace
+     --------------------------------------------------------------- */
+  weather: {
+    name: "Weather Garden",
+    blurb: "Temperature colours the garden",
+
+    /**
+     * "banded" art swaps the whole render as a value crosses a threshold,
+     * rather than tinting one clip. Bands are matched in order on `upTo`
+     * (degrees C), so the last one must be Infinity or a hot day matches
+     * nothing.
+     *
+     * One render per band: the blue clip at 10°C and below, the green one
+     * above that to 20°C, the red one above 20°C. `upTo` is inclusive, so
+     * the split reads as 0–10 / 11–20 / 21+ on whole degrees, and a
+     * fractional reading like 10.4°C falls in the band above it.
+     */
+    art: {
+      mode: "banded",
+      by: "tempC",              // which field of the reading chooses the band
+      bands: [
+        { id: "weather-cold", upTo: 10, label: "Cool" },   // blue render
+        { id: "weather-mild", upTo: 20, label: "Mild" },   // green render
+        { id: "weather-warm", upTo: Infinity, label: "Warm" } // red render
+      ]
+    },
+
+    data: {
+      endpoint: "/api/wind",
+      pollMs: 5 * 60 * 1000,
+      apply(reading, ctx) {
+        ctx.setPlaybackRate(rateFrom(reading.kph, WIND_TO_RATE));
+
+        // Still called, and still what swaps the render as the temperature
+        // crosses a band — it simply is not shown in the HUD any more.
+        const band = ctx.selectBand(reading.tempC);
+
+        return { wind: reading.kph, temp: reading.tempC, band };
+      }
+    },
+
+    flights: false,
+    panels: { tower: true, stats: false, legend: false, detail: false, weather: true }
+  },
+
+  /* ---------------------------------------------------------------
+     3 · TEMPLATE — copy this block to add a visualization
+     ---------------------------------------------------------------
+     Flip `enabled` to true and it appears in the switcher. Then:
+
+       1. point data.endpoint at your feed. If it needs a secret key,
+          add a route to server.js and api/ and proxy it there, the way
+          /api/wind hides WEATHERAPI_KEY — never call a keyed API from
+          this file, it ships to the browser.
+       2. add your video ids to VIDEO_PATHS above AND to VIDEO_KEYS in
+          api/_r2.js. The presigner only signs allowlisted ids.
+       3. write apply(): it receives the parsed reading, drives the art
+          through ctx, and returns whatever the HUD should show.
+
+     ctx gives you:
+       ctx.setPlaybackRate(n)   — speed of the current render
+       ctx.selectBand(value)    — for art.mode "banded": picks the band
+                                  and swaps the video when it changes
+     --------------------------------------------------------------- */
+  template: {
+    enabled: false,
+    name: "Scene 3",
+    blurb: "Describe the data here",
+
+    art: { mode: "single", videoId: "flight-garden" },
+
+    data: {
+      endpoint: "/api/wind",
+      pollMs: 5 * 60 * 1000,
+      apply(reading, ctx) {
+        ctx.setPlaybackRate(rateFrom(reading.kph, WIND_TO_RATE));
+        return {};
+      }
+    },
+
+    flights: false,
+    panels: { tower: true, stats: false, legend: false, detail: false, weather: true }
+  }
+};
+
+/** Which scene the app opens on. */
+const DEFAULT_SCENE = "flight";
+
+/** Scene ids the switcher offers — `enabled: false` keeps a draft out of it. */
+const sceneIds = () => Object.keys(SCENES).filter((id) => SCENES[id].enabled !== false);
+
+let gardenVideoEl = null;
 
 /**
  * Loads a .glb as a THREE.Group via GLTFLoader. mainflower.glb ships
@@ -946,57 +1135,199 @@ function loadTerminalFlowers() {
     });
 }
 
-/**
- * Where the garden render comes from. It is never served from this repo:
- * at 1.2 GB the file belongs in object storage, so it lives in Cloudflare
- * R2 and nothing under assets/ backs it up.
- *
- * By default the app asks its own /api/garden-video, which 302s to a
- * short-lived presigned URL (see api/garden-video.js). That keeps the
- * bucket private and the R2 credentials server-side.
- *
- * Setting R2_PUBLIC_BASE to the bucket's public base — its "Public
- * Development URL", https://pub-<hash>.r2.dev, or a custom domain bound to
- * the bucket — skips the redirect and streams straight off R2's CDN
- * instead, which caches better. Either way the bucket's CORS policy must
- * allow this app's origin: the VideoTexture below is uploaded to the GPU,
- * so without CORS headers the WebGL context is tainted and the upload
- * throws.
- *
- * What streams is the master exactly as rendered — 3840×2160 @ 30fps,
- * 80 Mbps, audio track intact, no re-encode. That is a mastering bitrate
- * rather than a streaming one, so the trade is deliberate: the garden is
- * pixel-identical to the render, at the cost of a long initial buffer on
- * slow connections and ~1.2 GB of egress per viewer. The file carries its
- * moov atom at the front, so playback at least begins before the whole
- * download finishes.
- */
-const R2_PUBLIC_BASE = "";
-const GARDEN_VIDEO_URL = R2_PUBLIC_BASE
-  ? `${R2_PUBLIC_BASE}/flight-simulation/4k_render_final_001.mp4`
-  : "/api/garden-video";
+/* =================================================================
+   7B · GARDEN RUNTIME — one plane, any number of renders
+   ================================================================= */
+
+/** Torn down whenever the plane is pointed at a different render. */
+let disposeGardenVideo = null;
+
+/** The video id currently on screen, so a no-op swap costs nothing. */
+let currentVideoId = null;
 
 /**
- * Brings up the garden layer. If the video can't load at all — offline, a
- * CORS misconfiguration, R2 unreachable — the scene keeps rendering without
- * a garden floor rather than failing outright; every other layer (blooms,
- * flights, HUD) is independent of it.
+ * Points the garden plane at `videoId`.
+ *
+ * Builds the LivingGarden on first call and re-targets it after that, so a
+ * scene switch never rebuilds the plane or disturbs anything sitting on it.
+ *
+ * If the clip will not load — it is not uploaded yet, CORS is misconfigured,
+ * R2 is unreachable — this falls back to ART.fallbackVideoId once. That is
+ * what lets the weather scene run today against renders that do not exist,
+ * instead of showing a black plane. A failure with no fallback left leaves
+ * the previous render playing rather than tearing the scene down.
  */
-async function loadGarden() {
+async function setGardenVideo(videoId, { allowFallback = true } = {}) {
+  if (videoId === currentVideoId) return true;
+
+  const url = ART.url(videoId);
+  let media;
+
   try {
-    const { texture, video, mediaAspect, mediaResolution } = await loadGardenVideoTexture(GARDEN_VIDEO_URL);
-    livingGarden = new LivingGarden(texture, mediaAspect, mediaResolution);
-    gardenVideoEl = video;
-    startWindDrivenVideoSpeed();
-    resize();
+    media = await loadGardenVideoTexture(url);
   } catch (err) {
-    console.warn(`[Flight Garden] Garden video unavailable at ${GARDEN_VIDEO_URL} — rendering without a garden layer.`, err);
+    const fallback = ART.fallbackVideoId;
+    if (allowFallback && fallback && fallback !== videoId) {
+      console.warn(
+        `[Flight Garden] render "${videoId}" unavailable at ${url} — falling back to "${fallback}". ` +
+        `Upload it to R2 under VIDEO_KEYS["${videoId}"] to use its own art.`,
+        err
+      );
+      return setGardenVideo(fallback, { allowFallback: false });
+    }
+    console.warn(`[Flight Garden] render "${videoId}" unavailable at ${url}.`, err);
+    return false;
+  }
+
+  // Swap first, then dispose: releasing the outgoing decoder before the new
+  // texture is bound would blank the plane for a frame.
+  const previousDispose = disposeGardenVideo;
+
+  if (livingGarden) {
+    livingGarden.setMedia(media.texture, media.mediaAspect, media.mediaResolution);
+  } else {
+    livingGarden = new LivingGarden(media.texture, media.mediaAspect, media.mediaResolution);
+  }
+
+  gardenVideoEl = media.video;
+  disposeGardenVideo = media.dispose;
+  currentVideoId = videoId;
+
+  if (previousDispose) previousDispose();
+
+  resize();
+  return true;
+}
+
+/* =================================================================
+   7C · SCENE RUNTIME — binds a feed to the art
+   ================================================================= */
+
+let activeSceneId = null;
+let scenePollTimer = null;
+
+/** Last values a scene's apply() returned, for the HUD to render. */
+let sceneReadout = {};
+
+/** The band the weather-style art is currently showing. */
+let currentBand = null;
+
+/**
+ * The handle a scene's `apply()` drives the artwork through. Keeping this
+ * behind a small interface is what lets a scene be pure configuration: it
+ * never touches the renderer, the texture, or the video element directly.
+ */
+function sceneContext(scene) {
+  return {
+    setPlaybackRate(rate) {
+      if (gardenVideoEl) gardenVideoEl.playbackRate = rate;
+    },
+
+    /**
+     * Picks the band `value` falls in and swaps the render if it changed.
+     * Returns the band so apply() can hand its label to the HUD.
+     */
+    selectBand(value) {
+      const bands = scene.art.bands ?? [];
+      const band = bands.find((b) => value <= b.upTo) ?? bands[bands.length - 1];
+      if (!band) return null;
+
+      if (band.id !== currentBand?.id) {
+        currentBand = band;
+        // Deliberately not awaited: the poll should not stall on a 4K load.
+        setGardenVideo(band.id);
+      }
+      return band;
+    }
+  };
+}
+
+async function pollScene(sceneId) {
+  const scene = SCENES[sceneId];
+  if (!scene?.data) return;
+
+  try {
+    const reading = await fetchReading(scene.data.endpoint);
+
+    // A slow request can land after the user has already switched away.
+    if (activeSceneId !== sceneId) return;
+
+    sceneReadout = scene.data.apply(reading, sceneContext(scene)) ?? {};
+    renderSceneReadout();
+  } catch (err) {
+    console.warn(`[Flight Garden] ${scene.name}: live data unavailable — art unchanged.`, err);
   }
 }
 
-loadGarden().finally(() => {
-  beginIntro();
-});
+function startScenePolling(sceneId) {
+  stopScenePolling();
+  const scene = SCENES[sceneId];
+  if (!scene?.data) return;
+
+  pollScene(sceneId);
+  scenePollTimer = setInterval(() => pollScene(sceneId), scene.data.pollMs);
+}
+
+function stopScenePolling() {
+  if (scenePollTimer) clearInterval(scenePollTimer);
+  scenePollTimer = null;
+}
+
+/**
+ * Brings a scene up: shows its panels, points the plane at its art, starts
+ * its feed, and runs its flight simulation only if it has one.
+ */
+async function activateScene(sceneId) {
+  const scene = SCENES[sceneId];
+  if (!scene) {
+    console.warn(`[Flight Garden] unknown scene "${sceneId}".`);
+    return;
+  }
+
+  activeSceneId = sceneId;
+  sceneReadout = {};
+  currentBand = null;
+
+  stopScenePolling();
+  applyScenePanels(scene);
+
+  // Butterflies belong to the flight scene; anything else starts from a
+  // clean garden so a stale flight cannot outlive its own visualization.
+  if (scene.flights) {
+    loadAirport(ui.select.value || "BLR");
+  } else {
+    clearAirport();
+    clearDetail();
+  }
+
+  // "single" art is pinned; "banded" art waits for the first reading to tell
+  // it which band to show, so it opens on the middle of the range rather
+  // than flashing a clip it is about to replace.
+  if (scene.art.mode === "single") {
+    await setGardenVideo(scene.art.videoId);
+  } else if (scene.art.mode === "banded") {
+    const bands = scene.art.bands ?? [];
+    const opening = bands[Math.floor(bands.length / 2)];
+    if (opening) {
+      currentBand = opening;
+      await setGardenVideo(opening.id);
+    }
+  }
+
+  startScenePolling(sceneId);
+}
+
+/**
+ * Brings up the first scene. Called from BOOT rather than here: activateScene
+ * reads `ui`, a const declared further down the file, so running it during
+ * module evaluation would hit its temporal dead zone.
+ *
+ * If the video cannot load at all the rest of the piece keeps rendering —
+ * every other layer is independent of the plane.
+ */
+async function loadGarden() {
+  await activateScene(DEFAULT_SCENE);
+}
 
 loadTerminalFlowers();
 
@@ -1302,7 +1633,10 @@ const REDUCED_MOTION = window.matchMedia?.("(prefers-reduced-motion: reduce)").m
 const ZONE_REVEAL_AT = REDUCED_MOTION ? 0.2 : 4.2;
 
 function updateLabels() {
-  for (const zone of ZONES) projectLabel(zone.el, zone.pos, introTime > ZONE_REVEAL_AT);
+  // Terminal captions name the flight scene's blooms — they mean nothing in
+  // any other visualization.
+  const show = !!SCENES[activeSceneId]?.flights && introTime > ZONE_REVEAL_AT;
+  for (const zone of ZONES) projectLabel(zone.el, zone.pos, show);
   labelMetricsDirty = false;
 }
 
@@ -2356,6 +2690,10 @@ function nextArrivalDelay() {
 }
 
 function updateSimulation(dt) {
+  // Only a scene that declares flights spawns and steps butterflies. Without
+  // this the weather scene would keep an invisible airport running.
+  if (!SCENES[activeSceneId]?.flights) return;
+
   sim.arrivalTimer -= dt;
   if (sim.arrivalTimer <= 0) {
     spawnArrival();
@@ -2447,7 +2785,20 @@ const ui = {
   dAlt: document.getElementById("dAlt"),
 
   tooltip: document.getElementById("tooltip"),
-  veil: document.getElementById("veil")
+  veil: document.getElementById("veil"),
+
+  // scene switching
+  sceneSelect: document.getElementById("sceneSelect"),
+  towerPanel: document.getElementById("towerPanel"),
+  airportWrap: document.getElementById("airportSelect")?.closest(".select-wrap"),
+  statsPanel: document.getElementById("statsPanel"),
+  legendPanel: document.getElementById("legendPanel"),
+  detailPanel: document.getElementById("detailPanel"),
+
+  // weather readout
+  weatherPanel: document.getElementById("weatherPanel"),
+  statTemp: document.getElementById("statTemp"),
+  statWind: document.getElementById("statWind")
 };
 
 /* --- airport selector --- */
@@ -2619,6 +2970,77 @@ canvas.addEventListener("pointerdown", (e) => {
 });
 
 ui.unpinBtn.addEventListener("click", () => setPinned(null));
+
+/* --- scene switching --- */
+
+/**
+ * Shows only the panels a scene declares, and tags <body> with the scene id
+ * so purely presentational rules (the terminal captions, for one) can follow
+ * along in CSS rather than in here.
+ */
+function applyScenePanels(scene) {
+  const panels = scene.panels ?? {};
+  const blocks = {
+    tower: ui.towerPanel,
+    stats: ui.statsPanel,
+    legend: ui.legendPanel,
+    detail: ui.detailPanel,
+    weather: ui.weatherPanel
+  };
+
+  for (const [key, el] of Object.entries(blocks)) {
+    if (el) el.hidden = !panels[key];
+  }
+
+  // The airport picker steers the flight simulation; in any other scene it
+  // would be a control with nothing behind it.
+  if (ui.airportWrap) ui.airportWrap.hidden = !scene.flights;
+
+  document.body.dataset.scene = activeSceneId ?? "";
+  ui.towerTitle.textContent = scene.name;
+  ui.towerSub.textContent = scene.blurb;
+}
+
+/** Paints whatever the active scene's apply() last returned. */
+function renderSceneReadout() {
+  const r = sceneReadout;
+
+  if (ui.statTemp) {
+    ui.statTemp.textContent = typeof r.temp === "number" ? r.temp.toFixed(1) : "\u2014";
+  }
+  if (ui.statWind) {
+    ui.statWind.textContent = typeof r.wind === "number" ? r.wind.toFixed(1) : "\u2014";
+  }
+}
+
+function buildSceneSelector() {
+  if (!ui.sceneSelect) return;
+
+  for (const id of sceneIds()) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = SCENES[id].name;
+    option.title = SCENES[id].blurb;
+    ui.sceneSelect.appendChild(option);
+  }
+
+  ui.sceneSelect.value = DEFAULT_SCENE;
+
+  ui.sceneSelect.addEventListener("change", (e) => {
+    const id = e.target.value;
+
+    // Same breath of darkness the airport switch uses, so a scene change
+    // reads as a deliberate cut rather than a glitch.
+    ui.veil.classList.add("switching");
+    ui.veil.classList.remove("lifted");
+
+    setTimeout(() => {
+      activateScene(id);
+      ui.veil.classList.remove("switching");
+      ui.veil.classList.add("lifted");
+    }, 300);
+  });
+}
 
 /* --- airport switching --- */
 
@@ -2915,12 +3337,19 @@ function animate() {
    ================================================================= */
 
 ui.select.value = "BLR";
-loadAirport("BLR");
 clearDetail();
+
+buildSceneSelector();
 
 initHUDToggle();
 initPostProcessing();
 animate();
+
+// activateScene seeds the airport, points the plane at the scene's render and
+// starts its feed. It is safe to call now: `ui` is initialised above.
+loadGarden().finally(() => {
+  beginIntro();
+});
 
 // If the texture is slow (or blocked by file:// CORS), still reveal the piece.
 setTimeout(beginIntro, 2500);

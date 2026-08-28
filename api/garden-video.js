@@ -19,11 +19,23 @@
  * the dashboard — .env is never deployed).
  */
 
-const { presignR2Get, GARDEN_VIDEO_KEY } = require('./_r2.js');
+const { presignR2Get, resolveVideoKey } = require('./_r2.js');
 
 module.exports = async (req, res) => {
+  // ?id= selects which render to stream (see VIDEO_KEYS in _r2.js). Only
+  // allowlisted ids resolve; anything else is refused rather than signed.
+  const id = new URL(req.url, 'http://localhost').searchParams.get('id');
+  const key = resolveVideoKey(id);
+
+  if (!key) {
+    res.setHeader('Content-Type', 'application/json');
+    res.statusCode = 400;
+    res.end(JSON.stringify({ error: `unknown video id: ${id}` }));
+    return;
+  }
+
   try {
-    const url = presignR2Get(process.env, GARDEN_VIDEO_KEY, 6 * 60 * 60);
+    const url = presignR2Get(process.env, key, 6 * 60 * 60);
     res.setHeader('Location', url);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.statusCode = 302;

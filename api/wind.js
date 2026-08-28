@@ -21,7 +21,15 @@ module.exports = async (req, res) => {
     if (!apiRes.ok) throw new Error(`weatherapi → HTTP ${apiRes.status}`);
     const data = await apiRes.json();
     res.setHeader("Cache-Control", "no-store");
-    res.status(200).json({ kph: data.current.wind_kph });
+
+    // kph drives video playback speed in every scene; temp_c additionally
+    // picks which of the weather scene's four renders is on screen. Both
+    // come from one call, so the second scene costs no extra rate limit.
+    res.status(200).json({
+      kph: data.current.wind_kph,
+      tempC: data.current.temp_c,
+      condition: data.current.condition?.text ?? null,
+    });
   } catch (err) {
     res.status(502).json({ error: String(err) });
   }

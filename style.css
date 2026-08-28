@@ -7,6 +7,24 @@
 
   --glass: rgba(255, 255, 255, 0.1);
   --glass-hi: rgba(255, 255, 255, 0.85);
+
+  /* Glass for the small cards that float over the artwork — the terminal
+     captions and the hover tooltip.
+
+     Same 10-15% white as --glass: these read as glass because the
+     backdrop-filter tints them with the garden underneath, not because they
+     are a white fill. An opaque fill was the first thing tried here and it
+     looked like a sticker, not like the sidebar.
+
+     They need their own filter because the panel's cannot survive being
+     moved: --blur's saturate(150%) and brightness(1.05) are tuned for the
+     bright, near-neutral corner the sidebar happens to occupy. A caption
+     sits over dark moss, where that same filter renders a dim, strongly
+     green card. Dropping saturation and lifting brightness lands the card's
+     rendered surface on rgb(217,224,210) — the sidebar's own rgb(222,223,221)
+     — while keeping it genuinely see-through. */
+  --glass-card: rgba(255, 255, 255, 0.15);
+  --blur-card: blur(26px) saturate(35%) brightness(1.8);
   --stroke: rgba(15, 23, 32, 0.12);
   --stroke-soft: rgba(15, 23, 32, 0.07);
 
@@ -47,6 +65,14 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* The hidden attribute has to win over the layout rules further down.
+   .hp-block and .stats set `display`, and an author `display` silently beats
+   the UA stylesheet's [hidden] { display: none } — so scene switching would
+   set the attribute correctly and leave the panel on screen anyway. */
+[hidden] {
+  display: none !important;
 }
 
 html,
@@ -128,12 +154,58 @@ body {
   display: flex !important;
 }
 
+/* =============================================================
+   FLOATING GLASS CARD
+   The sidebar's material (see .panel), at caption scale — used by the
+   terminal captions and the butterfly hover tooltip, so everything that
+   floats over the garden is made of the same thing.
+
+   The top hairline of light is painted as a background layer rather than
+   .panel's ::before, for two reasons: it clips to the border radius on its
+   own, and it can never end up on top of the content — which matters here
+   because the tooltip's text is a bare text node with no element to raise
+   above an overlapping pseudo-element.
+   ============================================================= */
+.zone-label,
+.tooltip {
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: var(--blur-card);
+  -webkit-backdrop-filter: var(--blur-card);
+  color: var(--text);
+
+  background:
+    linear-gradient(180deg,
+        var(--glass-hi) 0%,
+        rgba(255, 255, 255, 0) 100%) top / 100% 45% no-repeat,
+    var(--glass-card);
+}
+
+/* Caption-scale layout — see .panel.
+   A caption tracks its bloom across the whole garden, landing on the white
+   petals as often as on the dark moss, so it has to carry its own surface:
+   white ink with a black glow (what this was) vanishes against the petals,
+   and bare dark ink would vanish against the moss. */
 .zone-label {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   align-items: center;
   text-align: center;
+
+  padding: 9px 15px 10px;
+}
+
+/* The zone's own colour, kept as a hairline accent above the name
+   (see the data-kind rules below). */
+.zone-label::before {
+  content: "";
+  width: 22px;
+  height: 1px;
+  margin-bottom: 5px;
+  background: currentColor;
+  opacity: 0.75;
 }
 
 .zone-label .zl-name {
@@ -141,49 +213,40 @@ body {
   font-weight: 600;
   letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--soft-white);
-  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.9);
+  color: var(--text);
 }
 
+/* Full --text, following .tower-sub — the panel's own equivalent subtitle,
+   which is near-black rather than faint. 9px mono is thinner than anything
+   on the panel, so the lighter greys measured below the panel's floor
+   (--faint 2.0:1, --muted 3.3:1, vs the panel's weakest at 4.0:1). The
+   hierarchy against the name is carried by size, weight, case and tracking,
+   not by ink. */
 .zone-label .zl-note {
   font-family: var(--mono);
   font-size: 9px;
   letter-spacing: 0.10em;
-  color: rgba(233, 239, 243, 0.62);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 1), 0 1px 12px rgba(0, 0, 0, 0.95);
-}
-
-.zone-label .zl-name {
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 1), 0 1px 14px rgba(0, 0, 0, 0.95);
-}
-
-.zone-label::before {
-  content: "";
-  width: 22px;
-  height: 1px;
-  margin-bottom: 4px;
-  background: currentColor;
-  opacity: 0.45;
+  color: var(--text);
 }
 
 .zone-label[data-kind="arrival"] {
-  color: var(--cyan);
+  color: var(--cyan-panel);
 }
 
 .zone-label[data-kind="departure"] {
-  color: var(--amber);
+  color: var(--amber-panel);
 }
 
 .zone-label[data-kind="holding"] {
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--faint);
 }
 
 .zone-label[data-kind="terminal"] {
-  color: #9fe6b8;
+  color: var(--mint-panel);
 }
 
 .zone-label[data-kind="runway"] {
-  color: rgba(196, 196, 255, 0.68);
+  color: #5b5f9e;
 }
 
 .gate-label {
@@ -308,6 +371,15 @@ body {
   color: var(--faint);
 }
 
+/* The visualization picker sits straight under its own label, and .eyebrow
+   carries no margin — without this the two are flush. Scoped to this block
+   so the legend and detail headings, which have their own spacing, are
+   left alone. */
+.scene .eyebrow {
+  display: block;
+  margin-bottom: 10px;
+}
+
 /* =============================================================
    TOWER PANEL
    ============================================================= */
@@ -382,7 +454,9 @@ body {
   pointer-events: none;
 }
 
-#airportSelect {
+/* Any select inside a .select-wrap, not one by id: the visualization
+   picker is the second one and adding a third should not need CSS. */
+.select-wrap select {
   appearance: none;
   -webkit-appearance: none;
   width: 100%;
@@ -398,17 +472,17 @@ body {
   transition: border-color 0.25s ease, background 0.25s ease;
 }
 
-#airportSelect:hover {
+.select-wrap select:hover {
   border-color: rgba(15, 23, 32, 0.24);
 }
 
-#airportSelect:focus-visible {
+.select-wrap select:focus-visible {
   outline: none;
   border-color: var(--cyan-panel);
   box-shadow: 0 0 0 3px rgba(11, 117, 148, 0.16);
 }
 
-#airportSelect option {
+.select-wrap select option {
   background: #f5f6f8;
   color: var(--text);
 }
@@ -719,18 +793,13 @@ body {
   transform: translate(-50%, -160%);
   transition: opacity 0.18s ease;
 
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--stroke);
-  background: rgba(6, 10, 14, 0.82);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.9);
+  /* Material comes from the shared floating-glass-card block above. */
+  padding: 7px 13px 8px;
 
   font-family: var(--mono);
   font-size: 10.5px;
   letter-spacing: 0.05em;
   white-space: nowrap;
-  color: var(--text);
 }
 
 .tooltip.visible {
@@ -738,7 +807,11 @@ body {
 }
 
 .tooltip .tt-accent {
-  color: var(--cyan);
+  /* --cyan is the bright on-dark accent; on light glass it washes out, so
+     the flight number uses the darker panel variant like every other
+     accent that sits on glass. */
+  color: var(--cyan-panel);
+  font-weight: 600;
 }
 
 /* =============================================================
@@ -997,7 +1070,7 @@ body {
     height: 4px;
   }
 
-  #airportSelect {
+  .select-wrap select {
     height: 25px;
     padding: 3px 22px 3px 8px;
     font-size: 9px;
