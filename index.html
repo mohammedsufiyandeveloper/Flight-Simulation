@@ -89,14 +89,30 @@
       </section>
 
       <!-- Live weather readout (weather scene only) -->
-      <section class="hp-block stats" id="weatherPanel" hidden>
-        <div class="stat" data-kind="arrival">
-          <span class="stat-value" id="statTemp">&mdash;</span>
-          <span class="stat-label">Temp &deg;C</span>
+      <section class="hp-block weather-block" id="weatherPanel" hidden>
+        <div class="stats">
+          <div class="stat" data-kind="arrival">
+            <span class="stat-value" id="statTemp">&mdash;</span>
+            <span class="stat-label">Temp &deg;C</span>
+          </div>
+          <div class="stat" data-kind="departure">
+            <span class="stat-value" id="statWind">&mdash;</span>
+            <span class="stat-label">Wind km/h</span>
+          </div>
         </div>
-        <div class="stat" data-kind="departure">
-          <span class="stat-value" id="statWind">&mdash;</span>
-          <span class="stat-label">Wind km/h</span>
+
+        <div class="weather-manual">
+          <label class="weather-field">
+            <span class="weather-field-label">Temp &deg;C</span>
+            <input type="number" id="manualTemp" min="-10" max="40" step="0.5" placeholder="—" />
+          </label>
+          <label class="weather-field">
+            <span class="weather-field-label">Wind km/h</span>
+            <input type="number" id="manualWind" min="0" max="60" step="0.5" placeholder="—" />
+          </label>
+          <button type="button" id="realtimeBtn" class="realtime-btn" disabled>
+            <span class="live-dot" aria-hidden="true"></span> Realtime
+          </button>
         </div>
       </section>
 

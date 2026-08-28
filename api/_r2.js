@@ -52,6 +52,20 @@ function presignR2Get(env, key, expiresInSeconds = 6 * 60 * 60) {
     'X-Amz-Date': amzDate,
     'X-Amz-Expires': String(expiresInSeconds),
     'X-Amz-SignedHeaders': 'host',
+    // S3's response-header override: forces this GET's response to carry a
+    // real Cache-Control regardless of what's stored on the object, so the
+    // browser can actually reuse a scene's video from its HTTP cache on a
+    // later switch back — see prefetchOtherScenes in main.js, which is the
+    // thing that makes that reuse actually happen instead of just possible.
+    // Matches this endpoint's own 1-hour presign lifetime (see
+    // api/garden-video.js) so a cached video never outlives the URL that
+    // fetched it.
+    // No space after the comma: URLSearchParams encodes spaces as "+", but
+    // SigV4's canonical query string requires strict %20 — the mismatch
+    // between what gets signed and what R2 re-derives fails as
+    // SignatureDoesNotMatch. Comma-separated with no space is still valid
+    // HTTP header syntax, so this sidesteps the encoding gap entirely.
+    'response-cache-control': 'public,max-age=3600',
   });
   params.sort(); // SigV4 requires the canonical query sorted by parameter name
   const canonicalQuery = params.toString();
@@ -97,8 +111,10 @@ function presignR2Get(env, key, expiresInSeconds = 6 * 60 * 60) {
 const VIDEO_KEYS = {
   'flight-garden': 'flight-simulation/4k_render_final_001.mp4',
 
-  'weather-cold': 'flight-simulation/weather_cold.mp4',
-  'weather-mild': 'flight-simulation/weather_mild.mp4',
+  // The weather scene used to swap between three separately-rendered clips
+  // (cold/mild/warm). It now tints this one red render's hue in the shader
+  // instead (see LivingGarden.setHueShift in main.js), so only one video is
+  // needed for the whole temperature range.
   'weather-warm': 'flight-simulation/weather_warm.mp4',
 };
 

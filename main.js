@@ -449,6 +449,7 @@ const GARDEN_FRAG = /* glsl */`
   uniform vec2  uVideoOffset;
   uniform vec2  uVideoResolution;  // native media px size, for the sharpen kernel's texel step
   uniform float uSharpenAmount;    // 0 off (mobile) .. ~0.3 (desktop) — counters bilinear softening
+  uniform float uHueShift;         // 0..1 turns around the color wheel; 0 leaves the source (red) untouched
 
   varying vec2 vUv;
 
@@ -459,6 +460,31 @@ const GARDEN_FRAG = /* glsl */`
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
+  }
+
+  // Standard RGB<->HSV round trip, used to rotate the video's hue for the
+  // weather scene's temperature tint — see uHueShift. Rotating in HSV keeps
+  // each pixel's brightness and saturation intact and just spins its color
+  // around the wheel, so it reads as one tinted render rather than a filter.
+  vec3 rgb2hsv(vec3 c){
+    vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+    vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+    float d = q.x - min(q.w, q.y);
+    float e = 1.0e-10;
+    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+  }
+
+  vec3 hsv2rgb(vec3 c){
+    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+  }
+
+  vec3 hueShift(vec3 rgb, float turns){
+    vec3 hsv = rgb2hsv(rgb);
+    hsv.x = fract(hsv.x + turns);
+    return hsv2rgb(hsv);
   }
 
   // Maps a plane UV onto uMap's own UV space so the media is fully visible,
@@ -497,7 +523,13 @@ const GARDEN_FRAG = /* glsl */`
 
     vec2 safeUv = clamp(mediaUv, 0.0, 1.0);
     vec3 normalCol = texture2D(uMap, safeUv).rgb;
-    vec3 rawCol = normalCol * mediaValid;
+    // abs(), not a plain > check: uHueShift can be negative (the 40°C+
+    // magenta anchor is -0.1111, the short way around the wheel from red —
+    // see the weather scene's thermal.anchors) and a bare "> 0.0001" would
+    // silently skip the rotation for every negative shift, always showing
+    // the source's native red instead.
+    vec3 tintedCol = abs(uHueShift) > 0.0001 ? hueShift(normalCol, uHueShift) : normalCol;
+    vec3 rawCol = tintedCol * mediaValid;
 
     gl_FragColor = vec4(rawCol, 1.0);
   }
@@ -531,7 +563,8 @@ class LivingGarden {
         uVideoScale: { value: GARDEN_VIDEO.scale },
         uVideoOffset: { value: new THREE.Vector2(GARDEN_VIDEO.offsetX, GARDEN_VIDEO.offsetY) },
         uVideoResolution: { value: new THREE.Vector2(mediaResolution[0], mediaResolution[1]) },
-        uSharpenAmount: { value: pickSharpenAmount(window.innerWidth) }
+        uSharpenAmount: { value: pickSharpenAmount(window.innerWidth) },
+        uHueShift: { value: 0 }
       }
     });
 
@@ -556,6 +589,11 @@ class LivingGarden {
     u.uMap.value = texture;
     u.uMediaAspect.value = mediaAspect;
     u.uVideoResolution.value.set(mediaResolution[0], mediaResolution[1]);
+  }
+
+  /** turns: 0..1 rotation around the color wheel. 0 leaves the source (red) untouched. */
+  setHueShift(turns) {
+    this.material.uniforms.uHueShift.value = turns;
   }
 
   /**
@@ -758,8 +796,6 @@ const R2_PUBLIC_BASE = "";
 /** Must mirror VIDEO_KEYS in api/_r2.js — that file is the security boundary. */
 const VIDEO_PATHS = {
   "flight-garden": "flight-simulation/4k_render_final_001.mp4",
-  "weather-cold": "flight-simulation/weather_cold.mp4",
-  "weather-mild": "flight-simulation/weather_mild.mp4",
   "weather-warm": "flight-simulation/weather_warm.mp4"
 };
 
@@ -799,6 +835,22 @@ function rateFrom(value, { min, max, minRate, maxRate }) {
 }
 
 const WIND_TO_RATE = { min: 18, max: 38, minRate: 1, maxRate: 1.1 };
+
+/**
+ * Piecewise-linear lookup for the weather scene's hue tint: anchors are
+ * [tempC, hueTurns] pairs sorted by tempC, and a reading between two anchors
+ * gets the straight-line blend between their hues. Outside the range, the
+ * nearest anchor's hue holds steady rather than extrapolating.
+ */
+function hueForTemp(tempC, anchors) {
+  if (tempC <= anchors[0][0]) return anchors[0][1];
+  for (let i = 1; i < anchors.length; i++) {
+    const [t0, h0] = anchors[i - 1];
+    const [t1, h1] = anchors[i];
+    if (tempC <= t1) return lerp(h0, h1, (tempC - t0) / (t1 - t0));
+  }
+  return anchors[anchors.length - 1][1];
+}
 
 /**
  * The live feed. One WeatherAPI call returns wind *and* temperature, so the
@@ -851,24 +903,55 @@ const SCENES = {
     blurb: "Temperature colours the garden",
 
     /**
-     * "banded" art swaps the whole render as a value crosses a threshold,
-     * rather than tinting one clip. Bands are matched in order on `upTo`
-     * (degrees C), so the last one must be Infinity or a hot day matches
-     * nothing.
+     * One render (the red clip) for the whole scene — temperature rotates
+     * its hue in the shader instead of swapping to a separately-rendered
+     * clip. `anchors` are [tempC, hueTurns] control points the current
+     * reading is linearly interpolated between (see hueForTemp); 0 turns is
+     * the source's own red, so a hot reading needs no rotation at all.
      *
-     * One render per band: the blue clip at 10°C and below, the green one
-     * above that to 20°C, the red one above 20°C. `upTo` is inclusive, so
-     * the split reads as 0–10 / 11–20 / 21+ on whole degrees, and a
-     * fractional reading like 10.4°C falls in the band above it.
+     * Each anchor's hue is the source video's own hue (~0°/red) rotated to
+     * match a 9-stop temperature palette (0-4 deep blue ... 40+ magenta),
+     * placed at that band's midpoint so a reading interpolates smoothly
+     * between bands rather than jumping at their edges. The last anchor
+     * (40°C, magenta) is written as a *negative* turn (-0.1111, i.e. -40°)
+     * rather than +0.8889: interpolating in "turns" space takes the
+     * straight-line path between two anchors, and going from 37°C's 0.0
+     * (red) up to +0.8889 would sweep the *long* way around the wheel
+     * through yellow/green/cyan/blue on approach to 40°C. The negative
+     * form is the same angle (GLSL's fract() wraps it to the identical
+     * 320° on the GPU) but takes the short path directly from red toward
+     * magenta, which is the transition that actually looks right.
+     *
+     * `labels` mirrors the same 9 bands for the HUD text, independent of
+     * the (continuous) hue itself.
      */
     art: {
-      mode: "banded",
-      by: "tempC",              // which field of the reading chooses the band
-      bands: [
-        { id: "weather-cold", upTo: 10, label: "Cool" },   // blue render
-        { id: "weather-mild", upTo: 20, label: "Mild" },   // green render
-        { id: "weather-warm", upTo: Infinity, label: "Warm" } // red render
-      ]
+      mode: "single",
+      videoId: "weather-warm",
+      thermal: {
+        anchors: [
+          [2, 0.5556],    // 0–4°C      deep teal/blue  #006699 → 200°
+          [7, 0.5556],    // 5–9°C      light blue      #3399CC → 200°
+          [12, 0.4475],   // 10–14°C    mint/soft green #66C2A5 → 161°
+          [17, 0.3333],   // 15–19°C    bright green    #4AAF4A → 120°
+          [22, 0.1339],   // 20–24°C    pale yellow     #FFE680 → 48°
+          [27, 0.0833],   // 25–29°C    soft orange     #FF9933 → 30°
+          [32, 0.0556],   // 30–34°C    dark orange     #FF5500 → 20°
+          [37, 0],        // 35–39°C    red (native)    #E60000 → 0°
+          [40, -0.1111]   // 40°C+      deep magenta    #990066 → 320° (-40°)
+        ],
+        labels: [
+          { upTo: 4, label: "Freezing" },
+          { upTo: 9, label: "Chilly" },
+          { upTo: 14, label: "Cool" },
+          { upTo: 19, label: "Mild" },
+          { upTo: 24, label: "Warm" },
+          { upTo: 29, label: "Summer" },
+          { upTo: 34, label: "Hot" },
+          { upTo: 39, label: "Very Hot" },
+          { upTo: Infinity, label: "Extreme Heat" }
+        ]
+      }
     },
 
     data: {
@@ -877,9 +960,9 @@ const SCENES = {
       apply(reading, ctx) {
         ctx.setPlaybackRate(rateFrom(reading.kph, WIND_TO_RATE));
 
-        // Still called, and still what swaps the render as the temperature
-        // crosses a band — it simply is not shown in the HUD any more.
-        const band = ctx.selectBand(reading.tempC);
+        // Not a render swap any more — just the hue rotation on the one
+        // clip. Still returns a band so the HUD keeps its Cool/Mild/Warm text.
+        const band = ctx.setThermalTint(reading.tempC);
 
         return { wind: reading.kph, temp: reading.tempC, band };
       }
@@ -904,9 +987,12 @@ const SCENES = {
           through ctx, and returns whatever the HUD should show.
 
      ctx gives you:
-       ctx.setPlaybackRate(n)   — speed of the current render
-       ctx.selectBand(value)    — for art.mode "banded": picks the band
-                                  and swaps the video when it changes
+       ctx.setPlaybackRate(n)     — speed of the current render
+       ctx.selectBand(value)      — for art.mode "banded": picks the band
+                                    and swaps the video when it changes
+       ctx.setThermalTint(value)  — for art.thermal: rotates the current
+                                    render's hue between its anchors instead
+                                    of swapping clips (see the weather scene)
      --------------------------------------------------------------- */
   template: {
     enabled: false,
@@ -934,6 +1020,63 @@ const DEFAULT_SCENE = "flight";
 
 /** Scene ids the switcher offers — `enabled: false` keeps a draft out of it. */
 const sceneIds = () => Object.keys(SCENES).filter((id) => SCENES[id].enabled !== false);
+
+/** Every video id a scene's art can put on screen, whatever its art.mode. */
+function sceneVideoIds(scene) {
+  if (scene.art.mode === "single") return [scene.art.videoId];
+  if (scene.art.mode === "banded") return (scene.art.bands ?? []).map((b) => b.id);
+  return [];
+}
+
+/** Video ids already warmed into the browser's HTTP cache, or being warmed. */
+const prefetchedVideoIds = new Set();
+
+/**
+ * Warms one video into the browser's HTTP cache without holding it in this
+ * tab's memory: the response is read in a loop and each chunk discarded
+ * immediately, but the network layer still writes the full body to disk
+ * cache as it streams past — same mechanism a plain `<link rel=prefetch>`
+ * uses, just for a resource type that isn't a valid `as` for that tag.
+ *
+ * The R2 GET this hits is signed with a `public, max-age=3600` cache
+ * override (see presignR2Get in api/_r2.js) — without that, the object's
+ * own stored headers might not be cacheable at all, and this would just
+ * burn bandwidth for nothing.
+ */
+async function prefetchVideo(videoId) {
+  if (prefetchedVideoIds.has(videoId)) return;
+  prefetchedVideoIds.add(videoId);
+
+  try {
+    const res = await fetch(ART.url(videoId));
+    if (!res.ok || !res.body) throw new Error(`prefetch ${videoId} → HTTP ${res.status}`);
+
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+  } catch (err) {
+    // Best-effort only — a failed warm-up just means the next switch to
+    // this scene pays the normal network cost instead of a cached one.
+    prefetchedVideoIds.delete(videoId);
+    console.warn(`[Flight Garden] prefetch of "${videoId}" failed — will retry on next switch.`, err);
+  }
+}
+
+/**
+ * Warms every other enabled scene's video(s) in the background once the
+ * active one is up and playing, so switching back later is a cache hit
+ * instead of a multi-second refetch. Fire-and-forget: never awaited, and
+ * never competes with the active scene's own load since it only starts
+ * after activateScene's own awaits have resolved.
+ */
+function prefetchOtherScenes(activeId) {
+  for (const id of sceneIds()) {
+    if (id === activeId) continue;
+    for (const videoId of sceneVideoIds(SCENES[id])) prefetchVideo(videoId);
+  }
+}
 
 let gardenVideoEl = null;
 
@@ -1213,6 +1356,13 @@ let sceneReadout = {};
 let currentBand = null;
 
 /**
+ * { kph, tempC } while the weather panel's sliders are driving the scene
+ * instead of a live reading, or null when the poll is in charge. Set by the
+ * slider `input` handlers, cleared by the Realtime button.
+ */
+let manualReading = null;
+
+/**
  * The handle a scene's `apply()` drives the artwork through. Keeping this
  * behind a small interface is what lets a scene be pure configuration: it
  * never touches the renderer, the texture, or the video element directly.
@@ -1238,6 +1388,24 @@ function sceneContext(scene) {
         setGardenVideo(band.id);
       }
       return band;
+    },
+
+    /**
+     * Rotates the current render's hue to match `value` on art.thermal's
+     * anchors, and returns the matching label band for the HUD — the
+     * tint-only sibling of selectBand, for a scene with one render instead
+     * of one per band.
+     */
+    setThermalTint(value) {
+      const thermal = scene.art.thermal;
+      if (!thermal) return null;
+
+      livingGarden?.setHueShift(hueForTemp(value, thermal.anchors));
+
+      const labels = thermal.labels ?? [];
+      const band = labels.find((b) => value <= b.upTo) ?? labels[labels.length - 1] ?? null;
+      currentBand = band;
+      return band;
     }
   };
 }
@@ -1245,6 +1413,14 @@ function sceneContext(scene) {
 async function pollScene(sceneId) {
   const scene = SCENES[sceneId];
   if (!scene?.data) return;
+
+  // The sliders are in charge: skip the fetch and re-apply their values,
+  // so a live reading landing mid-override can't quietly overwrite it.
+  if (manualReading) {
+    sceneReadout = scene.data.apply(manualReading, sceneContext(scene)) ?? {};
+    renderSceneReadout();
+    return;
+  }
 
   try {
     const reading = await fetchReading(scene.data.endpoint);
@@ -1259,13 +1435,19 @@ async function pollScene(sceneId) {
   }
 }
 
+/**
+ * Returns the first poll's promise (rather than firing it and forgetting)
+ * so activateScene can await it — the caller decides whether a scene switch
+ * should hold its reveal for that first reading or not.
+ */
 function startScenePolling(sceneId) {
   stopScenePolling();
   const scene = SCENES[sceneId];
-  if (!scene?.data) return;
+  if (!scene?.data) return Promise.resolve();
 
-  pollScene(sceneId);
+  const first = pollScene(sceneId);
   scenePollTimer = setInterval(() => pollScene(sceneId), scene.data.pollMs);
+  return first;
 }
 
 function stopScenePolling() {
@@ -1288,6 +1470,11 @@ async function activateScene(sceneId) {
   sceneReadout = {};
   currentBand = null;
 
+  // A leftover override from the scene just left shouldn't silently steer
+  // this one — each scene starts back on the live feed.
+  manualReading = null;
+  if (ui.realtimeBtn) ui.realtimeBtn.disabled = true;
+
   stopScenePolling();
   applyScenePanels(scene);
 
@@ -1305,6 +1492,13 @@ async function activateScene(sceneId) {
   // than flashing a clip it is about to replace.
   if (scene.art.mode === "single") {
     await setGardenVideo(scene.art.videoId);
+
+    // A thermal-tinted scene opens unshifted — the render's own native
+    // colour — rather than guessing a band. It's an instant no-op default
+    // that's always a real, correct-looking frame; startScenePolling below
+    // is awaited, so this is what shows for at most one reading's latency,
+    // never as a lingering wrong-coloured flash.
+    if (scene.art.thermal) livingGarden?.setHueShift(0);
   } else if (scene.art.mode === "banded") {
     const bands = scene.art.bands ?? [];
     const opening = bands[Math.floor(bands.length / 2)];
@@ -1314,7 +1508,16 @@ async function activateScene(sceneId) {
     }
   }
 
-  startScenePolling(sceneId);
+  // Awaited so a scene switch's veil stays down until the art is not just
+  // loaded but correctly coloured/paced — otherwise the reveal exposes a
+  // half-second window of the wrong hue (or, before this, the outgoing
+  // scene's own video still playing underneath).
+  await startScenePolling(sceneId);
+
+  // Deliberately not awaited: this scene is already up, so warming the
+  // *other* one's video happens quietly in the background and must never
+  // delay the veil lifting on this one.
+  prefetchOtherScenes(sceneId);
 }
 
 /**
@@ -2798,7 +3001,10 @@ const ui = {
   // weather readout
   weatherPanel: document.getElementById("weatherPanel"),
   statTemp: document.getElementById("statTemp"),
-  statWind: document.getElementById("statWind")
+  statWind: document.getElementById("statWind"),
+  manualTemp: document.getElementById("manualTemp"),
+  manualWind: document.getElementById("manualWind"),
+  realtimeBtn: document.getElementById("realtimeBtn")
 };
 
 /* --- airport selector --- */
@@ -3011,6 +3217,13 @@ function renderSceneReadout() {
   if (ui.statWind) {
     ui.statWind.textContent = typeof r.wind === "number" ? r.wind.toFixed(1) : "\u2014";
   }
+
+  // While the poll is in charge, keep the sliders tracking it so grabbing
+  // one starts from the current reading instead of wherever they last sat.
+  if (!manualReading) {
+    if (ui.manualTemp && typeof r.temp === "number") ui.manualTemp.value = r.temp;
+    if (ui.manualWind && typeof r.wind === "number") ui.manualWind.value = r.wind;
+  }
 }
 
 function buildSceneSelector() {
@@ -3034,11 +3247,46 @@ function buildSceneSelector() {
     ui.veil.classList.add("switching");
     ui.veil.classList.remove("lifted");
 
-    setTimeout(() => {
-      activateScene(id);
+    setTimeout(async () => {
+      // Awaited: activateScene doesn't resolve until its render is loaded
+      // AND correctly coloured, so the veil hides the whole load — a new
+      // clip (or a network-bound one, like the weather scene's) never gets
+      // exposed mid-fetch or on a placeholder colour.
+      await activateScene(id);
       ui.veil.classList.remove("switching");
       ui.veil.classList.add("lifted");
     }, 300);
+  });
+}
+
+/**
+ * Wires the weather panel's temp/wind fields and Realtime button. Typing a
+ * value into either engages manualReading and re-applies it immediately, so
+ * the hue/speed change is visible without waiting on pollScene's interval;
+ * Realtime clears it and forces one live poll to hand control straight back.
+ */
+function wireWeatherManualControls() {
+  const applyManual = () => {
+    if (!activeSceneId || !ui.manualTemp || !ui.manualWind) return;
+
+    const tempC = Number(ui.manualTemp.value);
+    const kph = Number(ui.manualWind.value);
+    // A field mid-edit ("-", "", a trailing ".") parses to NaN — ignore the
+    // keystroke rather than push a broken reading into the shader.
+    if (!Number.isFinite(tempC) || !Number.isFinite(kph)) return;
+
+    manualReading = { tempC, kph };
+    if (ui.realtimeBtn) ui.realtimeBtn.disabled = false;
+    pollScene(activeSceneId);
+  };
+
+  ui.manualTemp?.addEventListener("input", applyManual);
+  ui.manualWind?.addEventListener("input", applyManual);
+
+  ui.realtimeBtn?.addEventListener("click", () => {
+    manualReading = null;
+    ui.realtimeBtn.disabled = true;
+    if (activeSceneId) pollScene(activeSceneId);
   });
 }
 
@@ -3340,6 +3588,7 @@ ui.select.value = "BLR";
 clearDetail();
 
 buildSceneSelector();
+wireWeatherManualControls();
 
 initHUDToggle();
 initPostProcessing();

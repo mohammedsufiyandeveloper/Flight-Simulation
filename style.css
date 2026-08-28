@@ -554,6 +554,100 @@ body {
   color: var(--faint);
 }
 
+/* Manual temp/wind override — type an exact value to test the weather
+   scene's colour mapping and speed without waiting on a live reading;
+   Realtime hands control back to the poll. */
+.weather-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 8px 0;
+  margin-top: 10px;
+  border-top: 1px solid var(--stroke-soft);
+}
+
+/* One field per row — label and input share that one line, Temp above Wind. */
+.weather-field {
+  display: grid;
+  grid-template-columns: 1fr 64px;
+  align-items: center;
+  gap: 8px;
+}
+
+.weather-field-label {
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.weather-field input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--stroke);
+  border-radius: 5px;
+  padding: 3px 6px;
+  text-align: right;
+}
+
+.weather-field input[type="number"]:focus-visible {
+  outline: none;
+  border-color: var(--cyan-panel);
+}
+
+/* Chrome/Safari's spinner arrows crowd a field this narrow. */
+.weather-field input[type="number"]::-webkit-inner-spin-button,
+.weather-field input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.realtime-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: flex-start;
+  pointer-events: auto;
+  border: 1px solid var(--stroke);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  padding: 4px 9px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
+}
+
+.realtime-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: rgba(15, 23, 32, 0.26);
+}
+
+/* Disabled means "already realtime" — no override to hand back. */
+.realtime-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Grey, still dot while live (nothing to hand back); green and pulsing
+   once a manual reading is in effect, matching the tower panel's own dot. */
+.realtime-btn:disabled .live-dot {
+  background: var(--faint);
+  box-shadow: none;
+  animation: none;
+}
+
 /* =============================================================
    LEGEND PANEL
    ============================================================= */
