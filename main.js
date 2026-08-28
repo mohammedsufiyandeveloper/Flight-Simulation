@@ -536,6 +536,14 @@ const GARDEN_FRAG = /* glsl */`
 `;
 
 /**
+ * Time constant for LivingGarden's hue easing: roughly how long a full
+ * blend between two colours takes to feel settled. Exponential easing
+ * never mathematically finishes, so this is a "practically there" figure,
+ * not a hard duration.
+ */
+const HUE_EASE_SECONDS = 1.4;
+
+/**
  * Owns the garden plane and the uniforms that make it feel alive. Gate state is
  * pushed in once per frame; nothing here allocates after construction.
  */
@@ -568,6 +576,12 @@ class LivingGarden {
       }
     });
 
+    // The uniform above is the *displayed* hue; this is where setHueShift
+    // points it — update() eases the uniform toward this every frame rather
+    // than jumping straight to it, so a new temperature reading blends in
+    // instead of cutting.
+    this.hueTarget = 0;
+
     this.mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(GARDEN.width, GARDEN.height),
       this.material
@@ -591,9 +605,14 @@ class LivingGarden {
     u.uVideoResolution.value.set(mediaResolution[0], mediaResolution[1]);
   }
 
-  /** turns: 0..1 rotation around the color wheel. 0 leaves the source (red) untouched. */
+  /**
+   * turns: rotation around the color wheel (0 leaves the source, red,
+   * untouched). Sets where the hue is headed, not where it is — update()
+   * eases the displayed value toward this each frame, so a new reading
+   * fades the garden into its new colour rather than snapping to it.
+   */
   setHueShift(turns) {
-    this.material.uniforms.uHueShift.value = turns;
+    this.hueTarget = turns;
   }
 
   /**
@@ -605,12 +624,29 @@ class LivingGarden {
     return 0.5;
   }
 
-  update(elapsed, master, activity) {
+  update(elapsed, master, activity, dt) {
     const u = this.material.uniforms;
     u.uTime.value = elapsed;
     u.uMaster.value = master;
     u.uBreath.value = LivingGarden.breath(elapsed);
     u.uActivity.value = activity;
+
+    // Ease the displayed hue toward hueTarget rather than jumping: an
+    // exponential approach (this frame closes a fixed *fraction* of
+    // whatever distance remains) so the blend is frame-rate independent
+    // and settles smoothly rather than at a constant, mechanical speed.
+    //
+    // The distance is computed mod 1 turn and wrapped into (-0.5, 0.5]
+    // before easing — a plain subtraction would, e.g., ease from 350°
+    // toward 10° the "long" way through the entire wheel instead of
+    // straight across the 0°/360° seam.
+    if (dt > 0) {
+      const current = u.uHueShift.value;
+      let delta = this.hueTarget - current;
+      delta -= Math.round(delta);
+      const ease = 1 - Math.exp(-dt / HUE_EASE_SECONDS);
+      u.uHueShift.value = current + delta * ease;
+    }
   }
 
   dispose() {
@@ -3568,7 +3604,7 @@ function animate() {
   updatePulses(dt, master);
 
   const activity = clamp(butterflies.length / 14, 0, 1);
-  livingGarden?.update(elapsed, master, activity);
+  livingGarden?.update(elapsed, master, activity, dt);
   updateTerminalFlowers(dt, elapsed);
 
   updateMotes(elapsed, master);
