@@ -8,6 +8,8 @@
  * WEATHERAPI_KEY is read from Vercel's project environment variables (set
  * in the dashboard, not from .env — .env never gets deployed).
  */
+const { resolveLocation } = require('./_locations.js');
+
 module.exports = async (req, res) => {
   const key = process.env.WEATHERAPI_KEY;
   if (!key) {
@@ -15,16 +17,26 @@ module.exports = async (req, res) => {
     return;
   }
 
+  // ?location= selects which place the weather scene's picker asked for
+  // (see WEATHER_LOCATIONS in main.js); omitted or unrecognised falls back
+  // to the default rather than being sent to WeatherAPI unchecked.
+  const locationId = new URL(req.url, "http://localhost").searchParams.get("location");
+  const location = resolveLocation(locationId);
+  if (!location) {
+    res.status(400).json({ error: `unknown location: ${locationId}` });
+    return;
+  }
+
   try {
-    const url = `https://api.weatherapi.com/v1/current.json?key=${key}&q=Bengaluru&_=${Date.now()}`;
+    const url = `https://api.weatherapi.com/v1/current.json?key=${key}&q=${encodeURIComponent(location.query)}&_=${Date.now()}`;
     const apiRes = await fetch(url);
     if (!apiRes.ok) throw new Error(`weatherapi → HTTP ${apiRes.status}`);
     const data = await apiRes.json();
     res.setHeader("Cache-Control", "no-store");
 
     // kph drives video playback speed in every scene; temp_c additionally
-    // picks which of the weather scene's four renders is on screen. Both
-    // come from one call, so the second scene costs no extra rate limit.
+    // tints the weather scene's render. Both come from one call, so the
+    // second scene costs no extra rate limit.
     res.status(200).json({
       kph: data.current.wind_kph,
       tempC: data.current.temp_c,

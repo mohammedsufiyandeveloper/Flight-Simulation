@@ -487,6 +487,13 @@ body {
   color: var(--text);
 }
 
+/* Country/city picker for the weather scene, sitting above its live
+   readout — same .select-wrap every other dropdown uses, just spaced off
+   the stats grid below it. */
+.location-select-wrap {
+  margin-bottom: 14px;
+}
+
 /* =============================================================
    STATS PANEL
    ============================================================= */

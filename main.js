@@ -835,6 +835,26 @@ const VIDEO_PATHS = {
   "weather-warm": "flight-simulation/weather_warm.mp4"
 };
 
+/**
+ * The weather scene's location picker — ids and order must mirror
+ * LOCATIONS in api/_locations.js, that file is the security boundary
+ * (/api/wind only signs ids on this allowlist, never an arbitrary query).
+ */
+const WEATHER_LOCATIONS = [
+  { id: "bengaluru", label: "Bengaluru, India" },
+  { id: "reykjavik", label: "Reykjavik, Iceland" },
+  { id: "oslo", label: "Oslo, Norway" },
+  { id: "london", label: "London, United Kingdom" },
+  { id: "newyork", label: "New York, United States" },
+  { id: "tokyo", label: "Tokyo, Japan" },
+  { id: "dubai", label: "Dubai, UAE" },
+  { id: "cairo", label: "Cairo, Egypt" },
+  { id: "sydney", label: "Sydney, Australia" },
+  { id: "riodejaneiro", label: "Rio de Janeiro, Brazil" }
+];
+
+const DEFAULT_LOCATION_ID = "bengaluru";
+
 const ART = {
   /**
    * Rather than show a black plane, a scene whose clip will not load falls
@@ -992,6 +1012,11 @@ const SCENES = {
 
     data: {
       endpoint: "/api/wind",
+      // Tells pollScene to append ?location=<selectedLocationId> to the
+      // endpoint — only this scene has a location picker (see
+      // WEATHER_LOCATIONS/wireLocationSelector); every other scene's
+      // /api/wind call is the plain, location-less one.
+      locationParam: true,
       pollMs: 5 * 60 * 1000,
       apply(reading, ctx) {
         ctx.setPlaybackRate(rateFrom(reading.kph, WIND_TO_RATE));
@@ -1398,6 +1423,9 @@ let currentBand = null;
  */
 let manualReading = null;
 
+/** Which WEATHER_LOCATIONS id the weather scene's picker is currently on. */
+let selectedLocationId = DEFAULT_LOCATION_ID;
+
 /**
  * The handle a scene's `apply()` drives the artwork through. Keeping this
  * behind a small interface is what lets a scene be pure configuration: it
@@ -1459,7 +1487,10 @@ async function pollScene(sceneId) {
   }
 
   try {
-    const reading = await fetchReading(scene.data.endpoint);
+    const endpoint = scene.data.locationParam
+      ? `${scene.data.endpoint}?location=${encodeURIComponent(selectedLocationId)}`
+      : scene.data.endpoint;
+    const reading = await fetchReading(endpoint);
 
     // A slow request can land after the user has already switched away.
     if (activeSceneId !== sceneId) return;
@@ -3036,6 +3067,7 @@ const ui = {
 
   // weather readout
   weatherPanel: document.getElementById("weatherPanel"),
+  locationSelect: document.getElementById("locationSelect"),
   statTemp: document.getElementById("statTemp"),
   statWind: document.getElementById("statWind"),
   manualTemp: document.getElementById("manualTemp"),
@@ -3322,6 +3354,34 @@ function wireWeatherManualControls() {
   ui.realtimeBtn?.addEventListener("click", () => {
     manualReading = null;
     ui.realtimeBtn.disabled = true;
+    if (activeSceneId) pollScene(activeSceneId);
+  });
+}
+
+/**
+ * Builds the weather scene's country/city picker and wires it: choosing a
+ * place points selectedLocationId (read by pollScene, see its
+ * locationParam branch) at the new id, drops any manual override so the
+ * scene shows that place's actual weather rather than stale numbers, and
+ * polls immediately instead of waiting for the 5-minute interval.
+ */
+function buildLocationSelector() {
+  if (!ui.locationSelect) return;
+
+  for (const { id, label } of WEATHER_LOCATIONS) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = label;
+    ui.locationSelect.appendChild(option);
+  }
+  ui.locationSelect.value = DEFAULT_LOCATION_ID;
+
+  ui.locationSelect.addEventListener("change", (e) => {
+    selectedLocationId = e.target.value;
+
+    manualReading = null;
+    if (ui.realtimeBtn) ui.realtimeBtn.disabled = true;
+
     if (activeSceneId) pollScene(activeSceneId);
   });
 }
@@ -3625,6 +3685,7 @@ clearDetail();
 
 buildSceneSelector();
 wireWeatherManualControls();
+buildLocationSelector();
 
 initHUDToggle();
 initPostProcessing();

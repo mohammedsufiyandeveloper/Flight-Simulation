@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { presignR2Get, resolveVideoKey } = require('./api/_r2.js');
+const { resolveLocation } = require('./api/_locations.js');
 
 const PORT = Number(process.env.PORT) || 8080;
 
@@ -37,7 +38,7 @@ const env = loadEnv(path.join(__dirname, '.env'));
  * process's env — it never reaches the browser, unlike calling the API
  * directly from client JS.
  */
-async function handleWindRequest(res) {
+async function handleWindRequest(res, locationId) {
   const key = process.env.WEATHERAPI_KEY || env.WEATHERAPI_KEY;
   if (!key) {
     res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -45,8 +46,15 @@ async function handleWindRequest(res) {
     return;
   }
 
+  const location = resolveLocation(locationId);
+  if (!location) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: `unknown location: ${locationId}` }));
+    return;
+  }
+
   try {
-    const url = `https://api.weatherapi.com/v1/current.json?key=${key}&q=Bengaluru&_=${Date.now()}`;
+    const url = `https://api.weatherapi.com/v1/current.json?key=${key}&q=${encodeURIComponent(location.query)}&_=${Date.now()}`;
     const apiRes = await fetch(url);
     if (!apiRes.ok) throw new Error(`weatherapi → HTTP ${apiRes.status}`);
     const data = await apiRes.json();
@@ -109,7 +117,8 @@ const server = http.createServer((req, res) => {
   const route = req.url.split('?')[0];
 
   if (route === '/api/wind') {
-    handleWindRequest(res);
+    const locationId = new URL(req.url, `http://${req.headers.host || 'localhost'}`).searchParams.get('location');
+    handleWindRequest(res, locationId);
     return;
   }
 

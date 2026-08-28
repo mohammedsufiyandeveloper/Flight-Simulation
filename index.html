@@ -90,6 +90,11 @@
 
       <!-- Live weather readout (weather scene only) -->
       <section class="hp-block weather-block" id="weatherPanel" hidden>
+        <label class="select-wrap location-select-wrap">
+          <span class="sr-only">Select location</span>
+          <select id="locationSelect"></select>
+        </label>
+
         <div class="stats">
           <div class="stat" data-kind="arrival">
             <span class="stat-value" id="statTemp">&mdash;</span>
