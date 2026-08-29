@@ -74,6 +74,38 @@ async function handleWindRequest(res, locationId) {
 }
 
 /**
+ * Local-dev twin of api/attendance.js — proxies trava-app's attendance
+ * headcounts so its API key stays server-side during `npm start` too.
+ */
+async function handleAttendanceRequest(res) {
+  const base = process.env.TRAVA_ATTENDANCE_API_URL || env.TRAVA_ATTENDANCE_API_URL;
+  const workspaceId = process.env.TRAVA_ATTENDANCE_WORKSPACE_ID || env.TRAVA_ATTENDANCE_WORKSPACE_ID;
+  if (!base || !workspaceId) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'TRAVA_ATTENDANCE_API_URL / TRAVA_ATTENDANCE_WORKSPACE_ID not configured' }));
+    return;
+  }
+
+  const key = process.env.TRAVA_ATTENDANCE_API_KEY || env.TRAVA_ATTENDANCE_API_KEY;
+
+  try {
+    const url = `${base}?workspaceId=${encodeURIComponent(workspaceId)}`;
+    const apiRes = await fetch(url, {
+      headers: key ? { Authorization: `Bearer ${key}` } : undefined,
+    });
+    const body = await apiRes.json();
+    if (!apiRes.ok || !body.success) {
+      throw new Error(body.error || `trava-app → HTTP ${apiRes.status}`);
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ present: body.data.present, absent: body.data.absent, late: body.data.late }));
+  } catch (err) {
+    res.writeHead(502, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: String(err) }));
+  }
+}
+
+/**
  * Local-dev twin of api/garden-video.js — redirects to a presigned R2 URL
  * for the garden render. See that file for why the video isn't served from
  * disk. Vercel runs the api/ version in production; this route only exists
@@ -119,6 +151,11 @@ const server = http.createServer((req, res) => {
   if (route === '/api/wind') {
     const locationId = new URL(req.url, `http://${req.headers.host || 'localhost'}`).searchParams.get('location');
     handleWindRequest(res, locationId);
+    return;
+  }
+
+  if (route === '/api/attendance') {
+    handleAttendanceRequest(res);
     return;
   }
 

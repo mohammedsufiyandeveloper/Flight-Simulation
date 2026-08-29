@@ -925,6 +925,57 @@ async function fetchReading(endpoint) {
   return data;
 }
 
+/**
+ * The attendance scene's feed — present/absent/late headcounts from
+ * trava-app. Same shape of proxy as fetchReading/api/wind.js: the trava-app
+ * API key never reaches the browser, /api/attendance reads it server-side
+ * from TRAVA_ATTENDANCE_API_KEY.
+ */
+async function fetchAttendanceReading(endpoint) {
+  const res = await fetch(endpoint);
+  if (!res.ok) throw new Error(`${endpoint} → HTTP ${res.status}`);
+  const data = await res.json();
+  if (
+    typeof data.present !== "number" ||
+    typeof data.absent !== "number" ||
+    typeof data.late !== "number"
+  ) {
+    throw new Error(data.error || `${endpoint} returned incomplete attendance counts`);
+  }
+  return data;
+}
+
+/**
+ * Turns present/absent/late counts into a hue-wheel position, the same way
+ * hueForTemp turns a temperature into one: each category's native colour is
+ * a turn offset from the source clip's own hue (red, 0 turns — see the
+ * weather scene's `thermal.anchors`), and the reading is the counts' own
+ * weighted average of those three offsets. All three sit within a 120°
+ * span, so a plain weighted mean never needs the wraparound hueForTemp's
+ * interpolation does — more present pulls the average toward green, more
+ * late toward orange, more absent leaves it at native red.
+ */
+const ATTENDANCE_HUE = { present: 0.3333, absent: 0, late: 0.0833 };
+
+function hueForAttendance({ present, absent, late }) {
+  const total = present + absent + late;
+  if (total <= 0) return 0;
+  return (
+    (present * ATTENDANCE_HUE.present + absent * ATTENDANCE_HUE.absent + late * ATTENDANCE_HUE.late) /
+    total
+  );
+}
+
+/** Which category the HUD calls out as driving the current tint. */
+function labelForAttendance({ present, absent, late }) {
+  const total = present + absent + late;
+  if (total <= 0) return null;
+  const top = Math.max(present, absent, late);
+  if (top === present) return "Mostly Present";
+  if (top === late) return "Mostly Late";
+  return "Mostly Absent";
+}
+
 const SCENES = {
   /* ---------------------------------------------------------------
      1 · FLIGHT — live air traffic as butterflies in a garden
@@ -1034,7 +1085,32 @@ const SCENES = {
   },
 
   /* ---------------------------------------------------------------
-     3 · TEMPLATE — copy this block to add a visualization
+     3 · ATTENDANCE — trava-app present/absent/late colours the garden
+     --------------------------------------------------------------- */
+  attendance: {
+    name: "Attendance Art",
+    blurb: "Presence colours the garden",
+
+    // Same clip as the weather scene, hue-rotated the same way — no new
+    // render to source, just a different reading driving the same uHueShift.
+    art: { mode: "single", videoId: "weather-warm" },
+
+    data: {
+      endpoint: "/api/attendance",
+      fetch: fetchAttendanceReading,
+      pollMs: 5 * 60 * 1000,
+      apply(reading, ctx) {
+        const band = ctx.setAttendanceTint(reading);
+        return { present: reading.present, absent: reading.absent, late: reading.late, band };
+      }
+    },
+
+    flights: false,
+    panels: { tower: true, stats: false, legend: false, detail: false, weather: false, attendance: true }
+  },
+
+  /* ---------------------------------------------------------------
+     4 · TEMPLATE — copy this block to add a visualization
      ---------------------------------------------------------------
      Flip `enabled` to true and it appears in the switcher. Then:
 
@@ -1470,6 +1546,18 @@ function sceneContext(scene) {
       const band = labels.find((b) => value <= b.upTo) ?? labels[labels.length - 1] ?? null;
       currentBand = band;
       return band;
+    },
+
+    /**
+     * Rotates the current render's hue to the counts' weighted-average
+     * position on the wheel (see hueForAttendance) and returns a label
+     * naming which category is driving it, for the HUD.
+     */
+    setAttendanceTint(counts) {
+      livingGarden?.setHueShift(hueForAttendance(counts));
+      const band = labelForAttendance(counts);
+      currentBand = band;
+      return band;
     }
   };
 }
@@ -1490,7 +1578,8 @@ async function pollScene(sceneId) {
     const endpoint = scene.data.locationParam
       ? `${scene.data.endpoint}?location=${encodeURIComponent(selectedLocationId)}`
       : scene.data.endpoint;
-    const reading = await fetchReading(endpoint);
+    const fetchFn = scene.data.fetch ?? fetchReading;
+    const reading = await fetchFn(endpoint);
 
     // A slow request can land after the user has already switched away.
     if (activeSceneId !== sceneId) return;
@@ -1565,7 +1654,7 @@ async function activateScene(sceneId) {
     // that's always a real, correct-looking frame; startScenePolling below
     // is awaited, so this is what shows for at most one reading's latency,
     // never as a lingering wrong-coloured flash.
-    if (scene.art.thermal) livingGarden?.setHueShift(0);
+    if (scene.art.thermal || sceneId === "attendance") livingGarden?.setHueShift(0);
   } else if (scene.art.mode === "banded") {
     const bands = scene.art.bands ?? [];
     const opening = bands[Math.floor(bands.length / 2)];
@@ -3072,7 +3161,13 @@ const ui = {
   statWind: document.getElementById("statWind"),
   manualTemp: document.getElementById("manualTemp"),
   manualWind: document.getElementById("manualWind"),
-  realtimeBtn: document.getElementById("realtimeBtn")
+  realtimeBtn: document.getElementById("realtimeBtn"),
+
+  // attendance readout
+  attendancePanel: document.getElementById("attendancePanel"),
+  statPresent: document.getElementById("statPresent"),
+  statAbsent: document.getElementById("statAbsent"),
+  statLate: document.getElementById("statLate")
 };
 
 /* --- airport selector --- */
@@ -3259,7 +3354,8 @@ function applyScenePanels(scene) {
     stats: ui.statsPanel,
     legend: ui.legendPanel,
     detail: ui.detailPanel,
-    weather: ui.weatherPanel
+    weather: ui.weatherPanel,
+    attendance: ui.attendancePanel
   };
 
   for (const [key, el] of Object.entries(blocks)) {
@@ -3291,6 +3387,16 @@ function renderSceneReadout() {
   if (!manualReading) {
     if (ui.manualTemp && typeof r.temp === "number") ui.manualTemp.value = r.temp;
     if (ui.manualWind && typeof r.wind === "number") ui.manualWind.value = r.wind;
+  }
+
+  if (ui.statPresent) {
+    ui.statPresent.textContent = typeof r.present === "number" ? r.present : "—";
+  }
+  if (ui.statAbsent) {
+    ui.statAbsent.textContent = typeof r.absent === "number" ? r.absent : "—";
+  }
+  if (ui.statLate) {
+    ui.statLate.textContent = typeof r.late === "number" ? r.late : "—";
   }
 }
 

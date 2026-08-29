@@ -43,6 +43,7 @@
   --cyan-panel: #0b7594;
   --amber-panel: #a3620f;
   --mint-panel: #1f7a4d;
+  --red-panel: #b3261e;
 
   --radius: 16px;
   --radius-sm: 10px;
@@ -551,6 +552,33 @@ body {
 
 .stat[data-kind="active"] .stat-value {
   color: var(--text);
+}
+
+/* Attendance scene's 3-up readout (present/absent/late) — one row instead
+   of the 2x2 grid the other stats blocks use. */
+.stats.stats-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.stats.stats-3 .stat {
+  border-bottom: none;
+  padding: 4px 8px;
+}
+
+.stats.stats-3 .stat:not(:last-child) {
+  border-right: 1px solid var(--stroke-soft);
+}
+
+.stat[data-kind="present"] .stat-value {
+  color: var(--mint-panel);
+}
+
+.stat[data-kind="absent"] .stat-value {
+  color: var(--red-panel);
+}
+
+.stat[data-kind="late"] .stat-value {
+  color: var(--amber-panel);
 }
 
 .stat-label {

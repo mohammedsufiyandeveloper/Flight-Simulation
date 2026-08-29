@@ -121,6 +121,24 @@
         </div>
       </section>
 
+      <!-- Live attendance readout (attendance scene only) -->
+      <section class="hp-block attendance-block" id="attendancePanel" hidden>
+        <div class="stats stats-3">
+          <div class="stat" data-kind="present">
+            <span class="stat-value" id="statPresent">&mdash;</span>
+            <span class="stat-label">Present</span>
+          </div>
+          <div class="stat" data-kind="absent">
+            <span class="stat-value" id="statAbsent">&mdash;</span>
+            <span class="stat-label">Absent</span>
+          </div>
+          <div class="stat" data-kind="late">
+            <span class="stat-value" id="statLate">&mdash;</span>
+            <span class="stat-label">Late</span>
+          </div>
+        </div>
+      </section>
+
       <!-- Legend -->
       <section class="hp-block legend" id="legendPanel">
         <h2 class="eyebrow">Carriers in Garden</h2>
