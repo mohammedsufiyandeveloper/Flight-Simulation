@@ -451,6 +451,14 @@ const GARDEN_FRAG = /* glsl */`
   uniform float uSharpenAmount;    // 0 off (mobile) .. ~0.3 (desktop) — counters bilinear softening
   uniform float uHueShift;         // 0..1 turns around the color wheel; 0 leaves the source (red) untouched
 
+  // Attendance scene only: paints present/absent/late as green/red/orange
+  // blotches sized by their share of the total, instead of one blended hue,
+  // so all three colors stay visibly distinct. uAttendanceMix is 0 for every
+  // other scene, leaving uHueShift in charge as before.
+  uniform float uAttendanceMix;
+  uniform vec2  uAttendanceShares;  // (presentShare, absentShare); lateShare = 1 - both
+  uniform vec2  uGardenInner;       // half-extents of the video's own opening, inside its white frame (world units)
+
   varying vec2 vUv;
 
   const vec3 GOLD = vec3(1.00, 0.82, 0.45);
@@ -461,6 +469,7 @@ const GARDEN_FRAG = /* glsl */`
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
   }
+
 
   // Standard RGB<->HSV round trip, used to rotate the video's hue for the
   // weather scene's temperature tint — see uHueShift. Rotating in HSV keeps
@@ -485,6 +494,18 @@ const GARDEN_FRAG = /* glsl */`
     vec3 hsv = rgb2hsv(rgb);
     hsv.x = fract(hsv.x + turns);
     return hsv2rgb(hsv);
+  }
+
+  // Forces a pixel to an exact hue/saturation, keeping only its own
+  // brightness (so the video's shading/grain still reads through). Used by
+  // the attendance scene instead of hueShift: a *rotation* leaves a
+  // desaturated pixel (e.g. white highlights) untouched, since hue is
+  // meaningless at zero saturation, and it leaves whichever category keeps
+  // the source's native hue looking like the raw, un-recoloured video rather
+  // than a real solid colour. Setting hue and saturation outright fixes both.
+  vec3 recolor(vec3 rgb, float hue, float sat){
+    float value = rgb2hsv(rgb).z;
+    return hsv2rgb(vec3(hue, sat, value));
   }
 
   // Maps a plane UV onto uMap's own UV space so the media is fully visible,
@@ -523,12 +544,83 @@ const GARDEN_FRAG = /* glsl */`
 
     vec2 safeUv = clamp(mediaUv, 0.0, 1.0);
     vec3 normalCol = texture2D(uMap, safeUv).rgb;
-    // abs(), not a plain > check: uHueShift can be negative (the 40°C+
-    // magenta anchor is -0.1111, the short way around the wheel from red —
-    // see the weather scene's thermal.anchors) and a bare "> 0.0001" would
-    // silently skip the rotation for every negative shift, always showing
-    // the source's native red instead.
-    vec3 tintedCol = abs(uHueShift) > 0.0001 ? hueShift(normalCol, uHueShift) : normalCol;
+
+    vec3 tintedCol;
+    if (uAttendanceMix > 0.5) {
+      // Coverage per color has to track its count's share, which is why
+      // category comes from a single per-cell hash used directly against
+      // the thresholds — a blended/interpolated noise value clusters near
+      // the middle of its range (an earlier version used that and it
+      // visibly skewed coverage toward whichever category owned the middle
+      // band, regardless of its actual share) where a raw hash lands close
+      // to uniform on 0..1, so each cell is an even, independent draw and
+      // area follows share.
+      //
+      // Smooth Voronoi, not a hard-edged one: picking a single nearest
+      // jittered cell per pixel (Worley F1) tiled the frame in flat polygons
+      // with knife-edge borders — it read as a broken camouflage texture,
+      // not the piece's own organic, living-garden look. Blending every
+      // nearby cell's colour by a Gaussian falloff on its distance instead
+      // gives soft, ink-like transitions between colors while keeping the
+      // same per-cell area (and so the same share-driven coverage), just
+      // with its edges feathered rather than cut.
+      vec2 grid = vUv * uSize * 2.6;
+      vec2 baseCell = floor(grid);
+      vec2 f = fract(grid);
+
+      // Same three hue stops as the wind/temp thermal anchors' green and
+      // orange bands. A fixed saturation (not the source pixel's own) is
+      // what makes every cell read as a solid particle colour rather than a
+      // tint riding on whatever the video already looked like there.
+      const float PRESENT_HUE = 0.3333;
+      const float ABSENT_HUE = 0.0;
+      const float LATE_HUE = 0.0833;
+      const float ATTEND_SAT = 0.85;
+      const float BLEND_SOFTNESS = 1.6;
+
+      float presentT = uAttendanceShares.x;
+      float absentT = presentT + uAttendanceShares.y;
+
+      vec3 colorSum = vec3(0.0);
+      float weightSum = 0.0;
+      for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+          vec2 neighbor = vec2(float(x), float(y));
+          vec2 cellId = baseCell + neighbor;
+          vec2 jitter = vec2(hash21(cellId + 11.3), hash21(cellId + 47.9));
+          float d = length(neighbor + jitter - f);
+
+          float catRand = hash21(cellId + 5.9);
+          float hue = catRand < presentT ? PRESENT_HUE : (catRand < absentT ? ABSENT_HUE : LATE_HUE);
+
+          float weight = exp(-d * d * BLEND_SOFTNESS * BLEND_SOFTNESS);
+          colorSum += recolor(normalCol, hue, ATTEND_SAT) * weight;
+          weightSum += weight;
+        }
+      }
+      vec3 attendanceCol = colorSum / max(weightSum, 0.0001);
+
+      // Confine the blend to the video's own interior opening — vUv covers
+      // the whole plane, including the white display-case frame baked into
+      // the footage around that opening, and recoloring straight to the
+      // edge of the plane spilled the tint out over that frame (and, by
+      // extension, made the outer cube read as tinted too). A 0.2-world-unit
+      // feather keeps the cutoff from being a hard line.
+      vec2 local = (vUv - 0.5) * uSize;
+      vec2 innerFade = 1.0 - smoothstep(uGardenInner - 0.2, uGardenInner, abs(local));
+      float insideMask = innerFade.x * innerFade.y;
+
+      tintedCol = mix(normalCol, attendanceCol, insideMask);
+    } else if (abs(uHueShift) > 0.0001) {
+      // abs(), not a plain > check: uHueShift can be negative (the 40°C+
+      // magenta anchor is -0.1111, the short way around the wheel from red —
+      // see the weather scene's thermal.anchors) and a bare "> 0.0001" would
+      // silently skip the rotation for every negative shift, always showing
+      // the source's native red instead.
+      tintedCol = hueShift(normalCol, uHueShift);
+    } else {
+      tintedCol = normalCol;
+    }
     vec3 rawCol = tintedCol * mediaValid;
 
     gl_FragColor = vec4(rawCol, 1.0);
@@ -572,7 +664,10 @@ class LivingGarden {
         uVideoOffset: { value: new THREE.Vector2(GARDEN_VIDEO.offsetX, GARDEN_VIDEO.offsetY) },
         uVideoResolution: { value: new THREE.Vector2(mediaResolution[0], mediaResolution[1]) },
         uSharpenAmount: { value: pickSharpenAmount(window.innerWidth) },
-        uHueShift: { value: 0 }
+        uHueShift: { value: 0 },
+        uAttendanceMix: { value: 0 },
+        uAttendanceShares: { value: new THREE.Vector2(0, 0) },
+        uGardenInner: { value: new THREE.Vector2(GARDEN.innerX, GARDEN.innerY) }
       }
     });
 
@@ -581,6 +676,10 @@ class LivingGarden {
     // than jumping straight to it, so a new temperature reading blends in
     // instead of cutting.
     this.hueTarget = 0;
+
+    // Same easing treatment for the attendance scene's blotch sizes — a new
+    // reading grows/shrinks each color's share smoothly instead of snapping.
+    this.attendanceSharesTarget = new THREE.Vector2(0, 0);
 
     this.mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(GARDEN.width, GARDEN.height),
@@ -615,6 +714,20 @@ class LivingGarden {
     this.hueTarget = turns;
   }
 
+  /** Turns the shader's three-colour attendance blend on or off. */
+  setAttendanceMix(active) {
+    this.material.uniforms.uAttendanceMix.value = active ? 1 : 0;
+  }
+
+  /**
+   * Sets where each color's share of the noise field is headed; late's
+   * share is implicit (1 - present - absent) so the shader always partitions
+   * the whole field. Eased in update() the same way hueTarget is.
+   */
+  setAttendanceShares(presentShare, absentShare) {
+    this.attendanceSharesTarget.set(presentShare, absentShare);
+  }
+
   /**
    * Organic timing: three incommensurate sines never repeat on a beat, so the
    * swell never feels like a metronome the way a single sin(t) does.
@@ -646,6 +759,10 @@ class LivingGarden {
       delta -= Math.round(delta);
       const ease = 1 - Math.exp(-dt / HUE_EASE_SECONDS);
       u.uHueShift.value = current + delta * ease;
+
+      const shares = u.uAttendanceShares.value;
+      shares.x += (this.attendanceSharesTarget.x - shares.x) * ease;
+      shares.y += (this.attendanceSharesTarget.y - shares.y) * ease;
     }
   }
 
@@ -943,27 +1060,6 @@ async function fetchAttendanceReading(endpoint) {
     throw new Error(data.error || `${endpoint} returned incomplete attendance counts`);
   }
   return data;
-}
-
-/**
- * Turns present/absent/late counts into a hue-wheel position, the same way
- * hueForTemp turns a temperature into one: each category's native colour is
- * a turn offset from the source clip's own hue (red, 0 turns — see the
- * weather scene's `thermal.anchors`), and the reading is the counts' own
- * weighted average of those three offsets. All three sit within a 120°
- * span, so a plain weighted mean never needs the wraparound hueForTemp's
- * interpolation does — more present pulls the average toward green, more
- * late toward orange, more absent leaves it at native red.
- */
-const ATTENDANCE_HUE = { present: 0.3333, absent: 0, late: 0.0833 };
-
-function hueForAttendance({ present, absent, late }) {
-  const total = present + absent + late;
-  if (total <= 0) return 0;
-  return (
-    (present * ATTENDANCE_HUE.present + absent * ATTENDANCE_HUE.absent + late * ATTENDANCE_HUE.late) /
-    total
-  );
 }
 
 /** Which category the HUD calls out as driving the current tint. */
@@ -1549,12 +1645,16 @@ function sceneContext(scene) {
     },
 
     /**
-     * Rotates the current render's hue to the counts' weighted-average
-     * position on the wheel (see hueForAttendance) and returns a label
-     * naming which category is driving it, for the HUD.
+     * Sizes the shader's green/red/orange blotches to the counts' shares of
+     * the total (see LivingGarden.setAttendanceShares) and returns a label
+     * naming which category is largest, for the HUD.
      */
     setAttendanceTint(counts) {
-      livingGarden?.setHueShift(hueForAttendance(counts));
+      const { present, absent, late } = counts;
+      const total = present + absent + late;
+      if (total > 0) {
+        livingGarden?.setAttendanceShares(present / total, absent / total);
+      }
       const band = labelForAttendance(counts);
       currentBand = band;
       return band;
@@ -1654,7 +1754,7 @@ async function activateScene(sceneId) {
     // that's always a real, correct-looking frame; startScenePolling below
     // is awaited, so this is what shows for at most one reading's latency,
     // never as a lingering wrong-coloured flash.
-    if (scene.art.thermal || sceneId === "attendance") livingGarden?.setHueShift(0);
+    if (scene.art.thermal) livingGarden?.setHueShift(0);
   } else if (scene.art.mode === "banded") {
     const bands = scene.art.bands ?? [];
     const opening = bands[Math.floor(bands.length / 2)];
@@ -1663,6 +1763,10 @@ async function activateScene(sceneId) {
       await setGardenVideo(opening.id);
     }
   }
+
+  // Only the attendance scene uses the shader's three-colour blend; every
+  // other scene falls back to uHueShift (or none) as before.
+  livingGarden?.setAttendanceMix(sceneId === "attendance");
 
   // Awaited so a scene switch's veil stays down until the art is not just
   // loaded but correctly coloured/paced — otherwise the reveal exposes a
