@@ -372,13 +372,193 @@ body {
   color: var(--faint);
 }
 
-/* The visualization picker sits straight under its own label, and .eyebrow
-   carries no margin — without this the two are flush. Scoped to this block
-   so the legend and detail headings, which have their own spacing, are
-   left alone. */
-.scene .eyebrow {
+/* Generate: the explicit action that combines a Data pick and an Art pick
+   into an output — a filled, primary-feeling action rather than the quiet
+   outline the Realtime button uses, since it's the one control the full-
+   screen intro gate needs a user to press (see .gate-generate below). */
+.generate-btn {
   display: block;
-  margin-bottom: 10px;
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--cyan-panel);
+  border-radius: var(--radius-sm);
+  background: var(--cyan-panel);
+  color: #fff;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.generate-btn:hover {
+  opacity: 0.88;
+}
+
+.generate-btn:active {
+  transform: scale(0.99);
+}
+
+/* =============================================================
+   INTRO GATE — full-screen, pre-video: pick the Data, pick the Art,
+   then Generate. Sits above everything (including .veil) so nothing
+   plays until it's dismissed. The card itself is the exact same
+   glossy glass .panel every sidebar section sits in — same
+   background, border, shadow and blur tokens — so the very first
+   screen reads as the same system as the HUD that follows it, not a
+   different, separately-designed splash.
+   ============================================================= */
+
+.intro-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+  transition: opacity 0.5s ease, visibility 0.5s ease;
+}
+
+.intro-gate.gate-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Combined with .panel in the markup for the glass itself; this class only
+   adds sizing and cancels .panel's cinematic entrance — that 1.9s hold is
+   timed to the reveal that follows the intro gate, and this gate IS the
+   first thing on screen, so it must render immediately instead of fading
+   in after a delay.
+
+   .panel's own background is a near-transparent 10% white — it only reads
+   as bright glass because backdrop-filter is lifting a bright, moving
+   garden video behind it. Nothing plays yet behind the intro gate, so that
+   same 10% white over solid black would render as a barely-legible dark
+   slab; this overrides just the background with the opaque, near-white
+   tone the sidebar's glass *visually resolves to* once blurred over video,
+   so the card reads identically bright without needing that backdrop. */
+.gate-panel {
+  position: relative;
+  z-index: 1;   /* above .panel::before's top sheen, same as .hp-block */
+  background: rgba(240, 242, 238, 0.96);
+  animation: none;
+  opacity: 1;
+  transform: none;
+  width: 100%;
+  max-width: 900px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 40px 44px 36px;
+  text-align: center;
+}
+
+.gate-kicker {
+  display: block;
+  margin-bottom: 18px;
+  font-size: clamp(14px, 2vw, 18px);
+  font-weight: 200;
+  letter-spacing: 0.36em;
+  text-indent: 0.36em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.gate-title {
+  margin: 0 0 8px;
+  font-size: clamp(22px, 4vw, 34px);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.gate-sub {
+  margin: 0 0 36px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.gate-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  margin-bottom: 32px;
+  text-align: left;
+}
+
+.gate-col-title {
+  margin: 0 0 12px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.gate-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Same surface the sidebar's own <select>s use (.select-wrap select) — a
+   thin-stroke card on faint ink-tinted glass — so a gate card and a sidebar
+   dropdown read as the same control language. */
+.gate-option {
+  display: block;
+  padding: 12px 16px;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  background: rgba(15, 23, 32, 0.05);
+  color: var(--text);
+  text-align: left;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.gate-option:hover {
+  border-color: rgba(15, 23, 32, 0.24);
+  background: rgba(15, 23, 32, 0.08);
+}
+
+.gate-option.selected {
+  border-color: var(--cyan-panel);
+  background: rgba(11, 117, 148, 0.12);
+}
+
+.gate-option-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Flight's one fixed render — shown, not chosen, so it reads as settled
+   rather than clickable (renderGateArtColumn renders it as a plain <div>,
+   never a <button>, but this belt-and-suspenders in case that changes). */
+.gate-option-locked {
+  cursor: default;
+}
+
+.gate-generate {
+  max-width: 320px;
+  margin: 0 auto;
+}
+
+@media (max-width: 640px) {
+  .gate-columns {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .gate-panel {
+    padding: 32px 24px 28px;
+  }
 }
 
 /* =============================================================
@@ -802,6 +982,16 @@ body {
   border-color: rgba(15, 23, 32, 0.26);
 }
 
+/* Tower panel's own .unpin — reopens the intro gate so a new Data + Art
+   combination can be picked without a page reload. Block-level here (the
+   detail panel's .unpin sits inline in a flex header instead) and given air
+   on both sides since it sits between the tower subtitle and the airport
+   select rather than next to a heading. */
+.new-output-btn {
+  display: block;
+  margin: 10px 0 14px;
+}
+
 .detail-empty {
   margin: 12px 0 2px;
   font-size: 11px;
@@ -980,6 +1170,13 @@ body {
   text-align: center;
   pointer-events: none;
   opacity: 0;
+}
+
+/* The intro gate sits in front of this the whole time a visitor is still
+   choosing Data + Art, so the reveal can't run on page load the way it used
+   to — beginIntro() (fired only once Generate is pressed) adds this class,
+   which is what actually starts the animation. */
+.titlecard.playing {
   /* Must be gone before the zone captions appear (see ZONE_REVEAL_AT). */
   animation: titlecard 4s cubic-bezier(0.4, 0, 0.2, 1) 0.4s forwards;
 }

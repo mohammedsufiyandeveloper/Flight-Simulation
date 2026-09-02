@@ -776,7 +776,8 @@ class LivingGarden {
 /**
  * Loads the garden video as a looping, muted THREE.VideoTexture — the only
  * source the garden layer has. Rejects if the URL won't load, which is what
- * lets loadGarden() give up cleanly and leave the rest of the scene running.
+ * lets setGardenVideo() fall back cleanly and leave the rest of the scene
+ * running.
  */
 async function loadGardenVideoTexture(url) {
   const video = document.createElement("video");
@@ -918,16 +919,30 @@ async function loadGardenVideoTexture(url) {
 }
 
 /* =================================================================
-   6B · SCENES — a data source bound to an artwork
+   6B · ART OPTIONS + DATA SOURCES
    ---------------------------------------------------------------
-   The app is a player for visualizations, not one visualization. A
-   scene names where its numbers come from, which render(s) it draws
-   on, and what those numbers do to them. Everything below reads this
-   table; nothing downstream hard-codes "flight" or "weather".
+   The app is a player for renders, not one visualization — and the
+   art (what's on screen) and the data (what drives it) are
+   independent choices the intro gate's Generate button combines. An
+   art option names nothing but its render; a data source names its
+   feed, which of its own panels the HUD shows, whether it runs the
+   flight/airport simulation, and what it does to whichever art is
+   currently up, through the generic ctx handed to apply().
 
-   To add one, copy the `template` block at the bottom, give it an id,
-   and add its video ids to VIDEO_KEYS in api/_r2.js so the presigner
-   will sign them. No engine code changes.
+   One pairing is fixed rather than free: the Flight data source only
+   ever makes sense over ART 1 — the butterflies land on that render's
+   own terminal blooms, so DATA_SOURCES.flight.fixedArtId locks the
+   gate's art column to it (see renderGateArtColumn), and
+   ART_OPTIONS.art1's exclusiveTo marks it out of the general pool
+   Weather/Attendance choose from. Every other pairing is free —
+   nothing downstream hard-codes a combination there.
+
+   To add an art option: give it an id in ART_OPTIONS, add its video
+   id to VIDEO_PATHS below AND to VIDEO_KEYS in api/_r2.js so the
+   presigner will sign it. To add a data source: give it an id in
+   DATA_SOURCES, point it at an endpoint (proxied server-side if it
+   needs a key — see /api/wind), and write apply(). No engine code
+   changes either way.
    ================================================================= */
 
 /**
@@ -948,8 +963,10 @@ const R2_PUBLIC_BASE = "";
 
 /** Must mirror VIDEO_KEYS in api/_r2.js — that file is the security boundary. */
 const VIDEO_PATHS = {
-  "flight-garden": "flight-simulation/4k_render_final_001.mp4",
-  "weather-warm": "flight-simulation/weather_warm.mp4"
+  art1: "flight-simulation/4k_render_final_001.mp4",
+  art2: "flight-simulation/2kwithoutflowers.mp4",
+  art3: "flight-simulation/ART3.mp4",
+  art4: "flight-simulation/weather_warm.mp4"
 };
 
 /**
@@ -980,7 +997,7 @@ const ART = {
    *
    * Set to null to disable the fallback and leave the plane empty instead.
    */
-  fallbackVideoId: "flight-garden",
+  fallbackVideoId: "art1",
 
   url(videoId) {
     // ?video=<url> still wins, for dropping in a local test render.
@@ -1072,194 +1089,173 @@ function labelForAttendance({ present, absent, late }) {
   return "Mostly Absent";
 }
 
-const SCENES = {
-  /* ---------------------------------------------------------------
-     1 · FLIGHT — live air traffic as butterflies in a garden
-     --------------------------------------------------------------- */
+/**
+ * The wind data source's temperature→hue mapping. `anchors` are [tempC,
+ * hueTurns] control points the current reading is linearly interpolated
+ * between (see hueForTemp); 0 turns is the source video's own red, so a hot
+ * reading needs no rotation at all.
+ *
+ * Each anchor's hue is the source video's own hue (~0°/red) rotated to match
+ * a 9-stop temperature palette (0-4 deep blue ... 40+ magenta), placed at
+ * that band's midpoint so a reading interpolates smoothly between bands
+ * rather than jumping at their edges. The last anchor (40°C, magenta) is
+ * written as a *negative* turn (-0.1111, i.e. -40°) rather than +0.8889:
+ * interpolating in "turns" space takes the straight-line path between two
+ * anchors, and going from 37°C's 0.0 (red) up to +0.8889 would sweep the
+ * *long* way around the wheel through yellow/green/cyan/blue on approach to
+ * 40°C. The negative form is the same angle (GLSL's fract() wraps it to the
+ * identical 320° on the GPU) but takes the short path directly from red
+ * toward magenta, which is the transition that actually looks right.
+ *
+ * `labels` mirrors the same 9 bands for the HUD text, independent of the
+ * (continuous) hue itself.
+ */
+const WIND_THERMAL = {
+  anchors: [
+    [2, 0.5556],    // 0–4°C      deep teal/blue  #006699 → 200°
+    [7, 0.5556],    // 5–9°C      light blue      #3399CC → 200°
+    [12, 0.4475],   // 10–14°C    mint/soft green #66C2A5 → 161°
+    [17, 0.3333],   // 15–19°C    bright green    #4AAF4A → 120°
+    [22, 0.1339],   // 20–24°C    pale yellow     #FFE680 → 48°
+    [27, 0.0833],   // 25–29°C    soft orange     #FF9933 → 30°
+    [32, 0.0556],   // 30–34°C    dark orange     #FF5500 → 20°
+    [37, 0],        // 35–39°C    red (native)    #E60000 → 0°
+    [40, -0.1111]   // 40°C+      deep magenta    #990066 → 320° (-40°)
+  ],
+  labels: [
+    { upTo: 4, label: "Freezing" },
+    { upTo: 9, label: "Chilly" },
+    { upTo: 14, label: "Cool" },
+    { upTo: 19, label: "Mild" },
+    { upTo: 24, label: "Warm" },
+    { upTo: 29, label: "Summer" },
+    { upTo: 34, label: "Hot" },
+    { upTo: 39, label: "Very Hot" },
+    { upTo: Infinity, label: "Extreme Heat" }
+  ]
+};
+
+/** Picks the labelled band a value falls in, from a `{ upTo, label }[]` list. */
+function bandForValue(value, labels) {
+  return labels.find((b) => value <= b.upTo) ?? labels[labels.length - 1] ?? null;
+}
+
+/**
+ * ART_OPTIONS — what's on screen. Each one is just a render: a video and a
+ * name, nothing else. It knows nothing about butterflies, panels, or where
+ * its colour/pace comes from — any of those can land on any art, driven by
+ * whichever data source is paired with it through the generic ctx in
+ * DATA_SOURCES' apply().
+ */
+const ART_OPTIONS = {
+  // Flight's own render — see DATA_SOURCES.flight.fixedArtId. exclusiveTo
+  // is what pulls it out of the general pool the gate offers under
+  // Weather/Attendance (see the general-pool filter in renderGateArtColumn).
+  art1: { name: "ART 1", blurb: "The original flight-garden render", videoId: "art1", exclusiveTo: "flight" },
+  art2: { name: "ART 2", blurb: "The bare garden, without its flowers", videoId: "art2" },
+  art3: { name: "ART 3", blurb: "A third garden render", videoId: "art3" },
+  art4: { name: "ART 4", blurb: "The warm, tintable garden render", videoId: "art4" }
+};
+
+/**
+ * DATA_SOURCES — where the numbers come from, and what they do to whichever
+ * art is currently up. Each one names a feed and an apply(reading, ctx) that
+ * drives the render through ctx's generic channels, plus which of its own
+ * panels the HUD should show alongside it. `flights` runs the butterfly/
+ * airport simulation over the art on top of whatever `apply` does to it.
+ * `tintMode` picks the shader's colour behaviour: "hue" rotates the art's
+ * hue, "attendance" turns on its three-colour present/absent/late blend,
+ * "none" leaves colour alone.
+ */
+const DATA_SOURCES = {
   flight: {
-    name: "Flight Garden",
-    blurb: "Butterflies are flights",
-
-    art: { mode: "single", videoId: "flight-garden" },
-
-    data: {
-      endpoint: "/api/wind",
-      pollMs: 5 * 60 * 1000,   // real-time enough without hammering the free tier
-      /** Wind sets how fast the garden breathes. */
-      apply(reading, ctx) {
-        const rate = rateFrom(reading.kph, WIND_TO_RATE);
-        ctx.setPlaybackRate(rate);
-        return { wind: reading.kph, rate };
-      }
+    name: "Flight",
+    blurb: "Live air traffic — wind sets the pace",
+    // The cinematic reveal's own copy (see beginIntro) — swapped in per
+    // data source so the piece introduces itself by whatever it's actually
+    // showing, instead of always naming the Flight scene.
+    titlecard: {
+      kicker: "Flight Garden",
+      line: "An airport, rendered as a living garden",
+      sub: "Butterflies are flights · Flowers are terminals"
     },
-
-    /** Butterflies, terminal captions and the airport selector belong to this scene. */
+    endpoint: "/api/wind",
+    pollMs: 5 * 60 * 1000,   // real-time enough without hammering the free tier
+    tintMode: "none",
     flights: true,
-    panels: { tower: true, stats: true, legend: true, detail: true, weather: false }
+    // Butterflies land on ART 1's own terminal blooms — no other render has
+    // them, so Flight can't be paired with anything else. See
+    // renderGateArtColumn, which locks the gate's art column to this id
+    // whenever Flight is the chosen data source.
+    fixedArtId: "art1",
+    apply(reading, ctx) {
+      const rate = rateFrom(reading.kph, WIND_TO_RATE);
+      ctx.setPlaybackRate(rate);
+      return { wind: reading.kph, rate };
+    },
+    panels: { tower: true, stats: true, legend: true, detail: true }
   },
 
-  /* ---------------------------------------------------------------
-     2 · WEATHER — temperature picks the render, wind sets its pace
-     --------------------------------------------------------------- */
   weather: {
-    name: "Weather Garden",
-    blurb: "Temperature colours the garden",
-
-    /**
-     * One render (the red clip) for the whole scene — temperature rotates
-     * its hue in the shader instead of swapping to a separately-rendered
-     * clip. `anchors` are [tempC, hueTurns] control points the current
-     * reading is linearly interpolated between (see hueForTemp); 0 turns is
-     * the source's own red, so a hot reading needs no rotation at all.
-     *
-     * Each anchor's hue is the source video's own hue (~0°/red) rotated to
-     * match a 9-stop temperature palette (0-4 deep blue ... 40+ magenta),
-     * placed at that band's midpoint so a reading interpolates smoothly
-     * between bands rather than jumping at their edges. The last anchor
-     * (40°C, magenta) is written as a *negative* turn (-0.1111, i.e. -40°)
-     * rather than +0.8889: interpolating in "turns" space takes the
-     * straight-line path between two anchors, and going from 37°C's 0.0
-     * (red) up to +0.8889 would sweep the *long* way around the wheel
-     * through yellow/green/cyan/blue on approach to 40°C. The negative
-     * form is the same angle (GLSL's fract() wraps it to the identical
-     * 320° on the GPU) but takes the short path directly from red toward
-     * magenta, which is the transition that actually looks right.
-     *
-     * `labels` mirrors the same 9 bands for the HUD text, independent of
-     * the (continuous) hue itself.
-     */
-    art: {
-      mode: "single",
-      videoId: "weather-warm",
-      thermal: {
-        anchors: [
-          [2, 0.5556],    // 0–4°C      deep teal/blue  #006699 → 200°
-          [7, 0.5556],    // 5–9°C      light blue      #3399CC → 200°
-          [12, 0.4475],   // 10–14°C    mint/soft green #66C2A5 → 161°
-          [17, 0.3333],   // 15–19°C    bright green    #4AAF4A → 120°
-          [22, 0.1339],   // 20–24°C    pale yellow     #FFE680 → 48°
-          [27, 0.0833],   // 25–29°C    soft orange     #FF9933 → 30°
-          [32, 0.0556],   // 30–34°C    dark orange     #FF5500 → 20°
-          [37, 0],        // 35–39°C    red (native)    #E60000 → 0°
-          [40, -0.1111]   // 40°C+      deep magenta    #990066 → 320° (-40°)
-        ],
-        labels: [
-          { upTo: 4, label: "Freezing" },
-          { upTo: 9, label: "Chilly" },
-          { upTo: 14, label: "Cool" },
-          { upTo: 19, label: "Mild" },
-          { upTo: 24, label: "Warm" },
-          { upTo: 29, label: "Summer" },
-          { upTo: 34, label: "Hot" },
-          { upTo: 39, label: "Very Hot" },
-          { upTo: Infinity, label: "Extreme Heat" }
-        ]
-      }
+    name: "Weather",
+    blurb: "Wind sets the pace, temperature colours the garden",
+    titlecard: {
+      kicker: "Weather Garden",
+      line: "Live weather, rendered as a living garden",
+      sub: "Temperature colours the garden · Wind sets its pace"
     },
-
-    data: {
-      endpoint: "/api/wind",
-      // Tells pollScene to append ?location=<selectedLocationId> to the
-      // endpoint — only this scene has a location picker (see
-      // WEATHER_LOCATIONS/wireLocationSelector); every other scene's
-      // /api/wind call is the plain, location-less one.
-      locationParam: true,
-      pollMs: 5 * 60 * 1000,
-      apply(reading, ctx) {
-        ctx.setPlaybackRate(rateFrom(reading.kph, WIND_TO_RATE));
-
-        // Not a render swap any more — just the hue rotation on the one
-        // clip. Still returns a band so the HUD keeps its Cool/Mild/Warm text.
-        const band = ctx.setThermalTint(reading.tempC);
-
-        return { wind: reading.kph, temp: reading.tempC, band };
-      }
-    },
-
+    endpoint: "/api/wind",
+    // Tells pollData to append ?location=<selectedLocationId> to the
+    // endpoint (see WEATHER_LOCATIONS/buildLocationSelector) — the only
+    // data source with a location picker.
+    locationParam: true,
+    pollMs: 5 * 60 * 1000,
+    tintMode: "hue",
     flights: false,
-    panels: { tower: true, stats: false, legend: false, detail: false, weather: true }
+    apply(reading, ctx) {
+      ctx.setPlaybackRate(rateFrom(reading.kph, WIND_TO_RATE));
+
+      const turns = hueForTemp(reading.tempC, WIND_THERMAL.anchors);
+      ctx.setHue(turns);
+      const band = bandForValue(reading.tempC, WIND_THERMAL.labels);
+
+      return { wind: reading.kph, temp: reading.tempC, band };
+    },
+    panels: { weather: true }
   },
 
-  /* ---------------------------------------------------------------
-     3 · ATTENDANCE — trava-app present/absent/late colours the garden
-     --------------------------------------------------------------- */
   attendance: {
-    name: "Attendance Art",
+    name: "Attendance",
     blurb: "Presence colours the garden",
-
-    // Same clip as the weather scene, hue-rotated the same way — no new
-    // render to source, just a different reading driving the same uHueShift.
-    art: { mode: "single", videoId: "weather-warm" },
-
-    data: {
-      endpoint: "/api/attendance",
-      fetch: fetchAttendanceReading,
-      pollMs: 5 * 60 * 1000,
-      apply(reading, ctx) {
-        const band = ctx.setAttendanceTint(reading);
-        return { present: reading.present, absent: reading.absent, late: reading.late, band };
-      }
+    titlecard: {
+      kicker: "Attendance Garden",
+      line: "Live attendance, rendered as a living garden",
+      sub: "Green is present · Red is absent · Orange is late"
     },
-
+    endpoint: "/api/attendance",
+    fetch: fetchAttendanceReading,
+    pollMs: 5 * 60 * 1000,
+    tintMode: "attendance",
     flights: false,
-    panels: { tower: true, stats: false, legend: false, detail: false, weather: false, attendance: true }
-  },
-
-  /* ---------------------------------------------------------------
-     4 · TEMPLATE — copy this block to add a visualization
-     ---------------------------------------------------------------
-     Flip `enabled` to true and it appears in the switcher. Then:
-
-       1. point data.endpoint at your feed. If it needs a secret key,
-          add a route to server.js and api/ and proxy it there, the way
-          /api/wind hides WEATHERAPI_KEY — never call a keyed API from
-          this file, it ships to the browser.
-       2. add your video ids to VIDEO_PATHS above AND to VIDEO_KEYS in
-          api/_r2.js. The presigner only signs allowlisted ids.
-       3. write apply(): it receives the parsed reading, drives the art
-          through ctx, and returns whatever the HUD should show.
-
-     ctx gives you:
-       ctx.setPlaybackRate(n)     — speed of the current render
-       ctx.selectBand(value)      — for art.mode "banded": picks the band
-                                    and swaps the video when it changes
-       ctx.setThermalTint(value)  — for art.thermal: rotates the current
-                                    render's hue between its anchors instead
-                                    of swapping clips (see the weather scene)
-     --------------------------------------------------------------- */
-  template: {
-    enabled: false,
-    name: "Scene 3",
-    blurb: "Describe the data here",
-
-    art: { mode: "single", videoId: "flight-garden" },
-
-    data: {
-      endpoint: "/api/wind",
-      pollMs: 5 * 60 * 1000,
-      apply(reading, ctx) {
-        ctx.setPlaybackRate(rateFrom(reading.kph, WIND_TO_RATE));
-        return {};
+    apply(reading, ctx) {
+      const total = reading.present + reading.absent + reading.late;
+      if (total > 0) {
+        ctx.setAttendanceShares(reading.present / total, reading.absent / total);
       }
-    },
+      const band = labelForAttendance(reading);
 
-    flights: false,
-    panels: { tower: true, stats: false, legend: false, detail: false, weather: true }
+      return { present: reading.present, absent: reading.absent, late: reading.late, band };
+    },
+    panels: { attendance: true }
   }
 };
 
-/** Which scene the app opens on. */
-const DEFAULT_SCENE = "flight";
+/** Which art and data source the app opens on. */
+const DEFAULT_ART = "art1";
+const DEFAULT_DATA = "flight";
 
-/** Scene ids the switcher offers — `enabled: false` keeps a draft out of it. */
-const sceneIds = () => Object.keys(SCENES).filter((id) => SCENES[id].enabled !== false);
-
-/** Every video id a scene's art can put on screen, whatever its art.mode. */
-function sceneVideoIds(scene) {
-  if (scene.art.mode === "single") return [scene.art.videoId];
-  if (scene.art.mode === "banded") return (scene.art.bands ?? []).map((b) => b.id);
-  return [];
-}
+const artIds = () => Object.keys(ART_OPTIONS);
+const dataSourceIds = () => Object.keys(DATA_SOURCES);
 
 /** Video ids already warmed into the browser's HTTP cache, or being warmed. */
 const prefetchedVideoIds = new Set();
@@ -1298,16 +1294,16 @@ async function prefetchVideo(videoId) {
 }
 
 /**
- * Warms every other enabled scene's video(s) in the background once the
- * active one is up and playing, so switching back later is a cache hit
- * instead of a multi-second refetch. Fire-and-forget: never awaited, and
- * never competes with the active scene's own load since it only starts
- * after activateScene's own awaits have resolved.
+ * Warms every other art option's video in the background once the active one
+ * is up and playing, so switching to it later is a cache hit instead of a
+ * multi-second refetch. Fire-and-forget: never awaited, and never competes
+ * with the active art's own load since it only starts after activateOutput's
+ * own awaits have resolved.
  */
-function prefetchOtherScenes(activeId) {
-  for (const id of sceneIds()) {
+function prefetchOtherArt(activeId) {
+  for (const id of artIds()) {
     if (id === activeId) continue;
-    for (const videoId of sceneVideoIds(SCENES[id])) prefetchVideo(videoId);
+    prefetchVideo(ART_OPTIONS[id].videoId);
   }
 }
 
@@ -1576,221 +1572,161 @@ async function setGardenVideo(videoId, { allowFallback = true } = {}) {
 }
 
 /* =================================================================
-   7C · SCENE RUNTIME — binds a feed to the art
+   7C · OUTPUT RUNTIME — binds a data source to an art
    ================================================================= */
 
-let activeSceneId = null;
-let scenePollTimer = null;
+let activeArtId = null;
+let activeDataId = null;
+let dataPollTimer = null;
 
-/** Last values a scene's apply() returned, for the HUD to render. */
+/** Last values the active data source's apply() returned, for the HUD to render. */
 let sceneReadout = {};
 
-/** The band the weather-style art is currently showing. */
-let currentBand = null;
-
 /**
- * { kph, tempC } while the weather panel's sliders are driving the scene
+ * { kph, tempC } while the weather panel's sliders are driving the output
  * instead of a live reading, or null when the poll is in charge. Set by the
  * slider `input` handlers, cleared by the Realtime button.
  */
 let manualReading = null;
 
-/** Which WEATHER_LOCATIONS id the weather scene's picker is currently on. */
+/** Which WEATHER_LOCATIONS id the wind data source's picker is currently on. */
 let selectedLocationId = DEFAULT_LOCATION_ID;
 
 /**
- * The handle a scene's `apply()` drives the artwork through. Keeping this
- * behind a small interface is what lets a scene be pure configuration: it
- * never touches the renderer, the texture, or the video element directly.
+ * The handle a data source's `apply()` drives whichever art is currently up
+ * through. Keeping this behind a small interface is what lets a data source
+ * be pure configuration, oblivious to which render it's tinting: it never
+ * touches the renderer, the texture, or the video element directly.
  */
-function sceneContext(scene) {
+function dataContext() {
   return {
     setPlaybackRate(rate) {
       if (gardenVideoEl) gardenVideoEl.playbackRate = rate;
     },
 
-    /**
-     * Picks the band `value` falls in and swaps the render if it changed.
-     * Returns the band so apply() can hand its label to the HUD.
-     */
-    selectBand(value) {
-      const bands = scene.art.bands ?? [];
-      const band = bands.find((b) => value <= b.upTo) ?? bands[bands.length - 1];
-      if (!band) return null;
-
-      if (band.id !== currentBand?.id) {
-        currentBand = band;
-        // Deliberately not awaited: the poll should not stall on a 4K load.
-        setGardenVideo(band.id);
-      }
-      return band;
+    /** Rotates the current render's hue — turns is 0..1 around the wheel. */
+    setHue(turns) {
+      livingGarden?.setHueShift(turns);
     },
 
     /**
-     * Rotates the current render's hue to match `value` on art.thermal's
-     * anchors, and returns the matching label band for the HUD — the
-     * tint-only sibling of selectBand, for a scene with one render instead
-     * of one per band.
+     * Sizes the shader's green/red/orange blotches to each category's share
+     * of the total (see LivingGarden.setAttendanceShares).
      */
-    setThermalTint(value) {
-      const thermal = scene.art.thermal;
-      if (!thermal) return null;
-
-      livingGarden?.setHueShift(hueForTemp(value, thermal.anchors));
-
-      const labels = thermal.labels ?? [];
-      const band = labels.find((b) => value <= b.upTo) ?? labels[labels.length - 1] ?? null;
-      currentBand = band;
-      return band;
-    },
-
-    /**
-     * Sizes the shader's green/red/orange blotches to the counts' shares of
-     * the total (see LivingGarden.setAttendanceShares) and returns a label
-     * naming which category is largest, for the HUD.
-     */
-    setAttendanceTint(counts) {
-      const { present, absent, late } = counts;
-      const total = present + absent + late;
-      if (total > 0) {
-        livingGarden?.setAttendanceShares(present / total, absent / total);
-      }
-      const band = labelForAttendance(counts);
-      currentBand = band;
-      return band;
+    setAttendanceShares(presentShare, absentShare) {
+      livingGarden?.setAttendanceShares(presentShare, absentShare);
     }
   };
 }
 
-async function pollScene(sceneId) {
-  const scene = SCENES[sceneId];
-  if (!scene?.data) return;
+async function pollData(dataId) {
+  const data = DATA_SOURCES[dataId];
+  if (!data?.endpoint) return;
 
   // The sliders are in charge: skip the fetch and re-apply their values,
   // so a live reading landing mid-override can't quietly overwrite it.
   if (manualReading) {
-    sceneReadout = scene.data.apply(manualReading, sceneContext(scene)) ?? {};
+    sceneReadout = data.apply(manualReading, dataContext()) ?? {};
     renderSceneReadout();
     return;
   }
 
   try {
-    const endpoint = scene.data.locationParam
-      ? `${scene.data.endpoint}?location=${encodeURIComponent(selectedLocationId)}`
-      : scene.data.endpoint;
-    const fetchFn = scene.data.fetch ?? fetchReading;
+    const endpoint = data.locationParam
+      ? `${data.endpoint}?location=${encodeURIComponent(selectedLocationId)}`
+      : data.endpoint;
+    const fetchFn = data.fetch ?? fetchReading;
     const reading = await fetchFn(endpoint);
 
     // A slow request can land after the user has already switched away.
-    if (activeSceneId !== sceneId) return;
+    if (activeDataId !== dataId) return;
 
-    sceneReadout = scene.data.apply(reading, sceneContext(scene)) ?? {};
+    sceneReadout = data.apply(reading, dataContext()) ?? {};
     renderSceneReadout();
   } catch (err) {
-    console.warn(`[Flight Garden] ${scene.name}: live data unavailable — art unchanged.`, err);
+    console.warn(`[Flight Garden] ${data.name}: live data unavailable — art unchanged.`, err);
   }
 }
 
 /**
  * Returns the first poll's promise (rather than firing it and forgetting)
- * so activateScene can await it — the caller decides whether a scene switch
- * should hold its reveal for that first reading or not.
+ * so activateOutput can await it — the caller decides whether an output
+ * switch should hold its reveal for that first reading or not.
  */
-function startScenePolling(sceneId) {
-  stopScenePolling();
-  const scene = SCENES[sceneId];
-  if (!scene?.data) return Promise.resolve();
+function startDataPolling(dataId) {
+  stopDataPolling();
+  const data = DATA_SOURCES[dataId];
+  if (!data?.endpoint) return Promise.resolve();
 
-  const first = pollScene(sceneId);
-  scenePollTimer = setInterval(() => pollScene(sceneId), scene.data.pollMs);
+  const first = pollData(dataId);
+  dataPollTimer = setInterval(() => pollData(dataId), data.pollMs);
   return first;
 }
 
-function stopScenePolling() {
-  if (scenePollTimer) clearInterval(scenePollTimer);
-  scenePollTimer = null;
+function stopDataPolling() {
+  if (dataPollTimer) clearInterval(dataPollTimer);
+  dataPollTimer = null;
 }
 
 /**
- * Brings a scene up: shows its panels, points the plane at its art, starts
- * its feed, and runs its flight simulation only if it has one.
+ * Brings an output up: shows the panels the data source declares, points the
+ * plane at the chosen art's render, starts the data source's feed, and runs
+ * the flight simulation only if the data source has one.
  */
-async function activateScene(sceneId) {
-  const scene = SCENES[sceneId];
-  if (!scene) {
-    console.warn(`[Flight Garden] unknown scene "${sceneId}".`);
+async function activateOutput(artId, dataId) {
+  const art = ART_OPTIONS[artId];
+  const data = DATA_SOURCES[dataId];
+  if (!art || !data) {
+    console.warn(`[Flight Garden] unknown art "${artId}" or data source "${dataId}".`);
     return;
   }
 
-  activeSceneId = sceneId;
+  activeArtId = artId;
+  activeDataId = dataId;
   sceneReadout = {};
-  currentBand = null;
 
-  // A leftover override from the scene just left shouldn't silently steer
-  // this one — each scene starts back on the live feed.
+  // A leftover override from the output just left shouldn't silently steer
+  // this one — each output starts back on the live feed.
   manualReading = null;
   if (ui.realtimeBtn) ui.realtimeBtn.disabled = true;
 
-  stopScenePolling();
-  applyScenePanels(scene);
+  stopDataPolling();
+  applyOutputPanels(art, data);
+  applyTitlecard(data);
 
-  // Butterflies belong to the flight scene; anything else starts from a
-  // clean garden so a stale flight cannot outlive its own visualization.
-  if (scene.flights) {
+  // Butterflies belong to data sources that declare flights; anything else
+  // starts from a clean garden so a stale flight cannot outlive the data
+  // source that was driving it.
+  if (data.flights) {
     loadAirport(ui.select.value || "BLR");
   } else {
     clearAirport();
     clearDetail();
   }
 
-  // "single" art is pinned; "banded" art waits for the first reading to tell
-  // it which band to show, so it opens on the middle of the range rather
-  // than flashing a clip it is about to replace.
-  if (scene.art.mode === "single") {
-    await setGardenVideo(scene.art.videoId);
+  await setGardenVideo(art.videoId);
 
-    // A thermal-tinted scene opens unshifted — the render's own native
-    // colour — rather than guessing a band. It's an instant no-op default
-    // that's always a real, correct-looking frame; startScenePolling below
-    // is awaited, so this is what shows for at most one reading's latency,
-    // never as a lingering wrong-coloured flash.
-    if (scene.art.thermal) livingGarden?.setHueShift(0);
-  } else if (scene.art.mode === "banded") {
-    const bands = scene.art.bands ?? [];
-    const opening = bands[Math.floor(bands.length / 2)];
-    if (opening) {
-      currentBand = opening;
-      await setGardenVideo(opening.id);
-    }
-  }
+  // Opens unshifted — the render's own native colour — rather than guessing
+  // a tint. It's an instant no-op default that's always a real,
+  // correct-looking frame; startDataPolling below is awaited, so this is
+  // what shows for at most one reading's latency, never as a lingering
+  // wrong-coloured flash.
+  livingGarden?.setHueShift(0);
+  livingGarden?.setAttendanceShares(0, 0);
+  livingGarden?.setAttendanceMix(data.tintMode === "attendance");
 
-  // Only the attendance scene uses the shader's three-colour blend; every
-  // other scene falls back to uHueShift (or none) as before.
-  livingGarden?.setAttendanceMix(sceneId === "attendance");
-
-  // Awaited so a scene switch's veil stays down until the art is not just
+  // Awaited so an output switch's veil stays down until the art is not just
   // loaded but correctly coloured/paced — otherwise the reveal exposes a
   // half-second window of the wrong hue (or, before this, the outgoing
-  // scene's own video still playing underneath).
-  await startScenePolling(sceneId);
+  // output's own video still playing underneath).
+  await startDataPolling(dataId);
 
-  // Deliberately not awaited: this scene is already up, so warming the
-  // *other* one's video happens quietly in the background and must never
-  // delay the veil lifting on this one.
-  prefetchOtherScenes(sceneId);
+  // Deliberately not awaited: this output is already up, so warming the
+  // other art options' video happens quietly in the background and must
+  // never delay the veil lifting on this one.
+  prefetchOtherArt(artId);
 }
 
-/**
- * Brings up the first scene. Called from BOOT rather than here: activateScene
- * reads `ui`, a const declared further down the file, so running it during
- * module evaluation would hit its temporal dead zone.
- *
- * If the video cannot load at all the rest of the piece keeps rendering —
- * every other layer is independent of the plane.
- */
-async function loadGarden() {
-  await activateScene(DEFAULT_SCENE);
-}
 
 loadTerminalFlowers();
 
@@ -2096,9 +2032,9 @@ const REDUCED_MOTION = window.matchMedia?.("(prefers-reduced-motion: reduce)").m
 const ZONE_REVEAL_AT = REDUCED_MOTION ? 0.2 : 4.2;
 
 function updateLabels() {
-  // Terminal captions name the flight scene's blooms — they mean nothing in
-  // any other visualization.
-  const show = !!SCENES[activeSceneId]?.flights && introTime > ZONE_REVEAL_AT;
+  // Terminal captions name the Flight data source's blooms — they mean
+  // nothing when a different data source is driving the art.
+  const show = !!DATA_SOURCES[activeDataId]?.flights && introTime > ZONE_REVEAL_AT;
   for (const zone of ZONES) projectLabel(zone.el, zone.pos, show);
   labelMetricsDirty = false;
 }
@@ -3153,9 +3089,9 @@ function nextArrivalDelay() {
 }
 
 function updateSimulation(dt) {
-  // Only a scene that declares flights spawns and steps butterflies. Without
-  // this the weather scene would keep an invisible airport running.
-  if (!SCENES[activeSceneId]?.flights) return;
+  // Only a data source that declares flights spawns and steps butterflies.
+  // Without this a non-flight data source would keep an invisible airport running.
+  if (!DATA_SOURCES[activeDataId]?.flights) return;
 
   sim.arrivalTimer -= dt;
   if (sim.arrivalTimer <= 0) {
@@ -3227,6 +3163,7 @@ const ui = {
   select: document.getElementById("airportSelect"),
   towerTitle: document.getElementById("towerTitle"),
   towerSub: document.getElementById("towerSub"),
+  newOutputBtn: document.getElementById("newOutputBtn"),
 
   arrivals: document.getElementById("statArrivals"),
   departures: document.getElementById("statDepartures"),
@@ -3249,9 +3186,18 @@ const ui = {
 
   tooltip: document.getElementById("tooltip"),
   veil: document.getElementById("veil"),
+  titlecard: document.getElementById("titlecard"),
+  tcKicker: document.getElementById("tcKicker"),
+  tcLine: document.getElementById("tcLine"),
+  tcSub: document.getElementById("tcSub"),
 
-  // scene switching
-  sceneSelect: document.getElementById("sceneSelect"),
+  // full-screen intro gate
+  introGate: document.getElementById("introGate"),
+  gateDataOptions: document.getElementById("gateDataOptions"),
+  gateArtOptions: document.getElementById("gateArtOptions"),
+  gateGenerateBtn: document.getElementById("gateGenerateBtn"),
+
+  // output switching
   towerPanel: document.getElementById("towerPanel"),
   airportWrap: document.getElementById("airportSelect")?.closest(".select-wrap"),
   statsPanel: document.getElementById("statsPanel"),
@@ -3444,15 +3390,21 @@ canvas.addEventListener("pointerdown", (e) => {
 
 ui.unpinBtn.addEventListener("click", () => setPinned(null));
 
-/* --- scene switching --- */
+/* --- output switching --- */
 
 /**
- * Shows only the panels a scene declares, and tags <body> with the scene id
- * so purely presentational rules (the terminal captions, for one) can follow
+ * Shows whichever panels the active data source declares (tower defaults on,
+ * everything else defaults off so an art option — which owns no panels of
+ * its own — never needs to be consulted), and tags <body> with both ids so
+ * purely presentational rules (the terminal captions, for one) can follow
  * along in CSS rather than in here.
  */
-function applyScenePanels(scene) {
-  const panels = scene.panels ?? {};
+function applyOutputPanels(art, data) {
+  const panels = {
+    tower: true, stats: false, legend: false, detail: false,
+    weather: false, attendance: false,
+    ...data.panels
+  };
   const blocks = {
     tower: ui.towerPanel,
     stats: ui.statsPanel,
@@ -3466,16 +3418,32 @@ function applyScenePanels(scene) {
     if (el) el.hidden = !panels[key];
   }
 
-  // The airport picker steers the flight simulation; in any other scene it
-  // would be a control with nothing behind it.
-  if (ui.airportWrap) ui.airportWrap.hidden = !scene.flights;
+  // The airport picker steers the flight simulation; with a data source
+  // that doesn't run one it would be a control with nothing behind it.
+  if (ui.airportWrap) ui.airportWrap.hidden = !data.flights;
 
-  document.body.dataset.scene = activeSceneId ?? "";
-  ui.towerTitle.textContent = scene.name;
-  ui.towerSub.textContent = scene.blurb;
+  document.body.dataset.art = activeArtId ?? "";
+  document.body.dataset.data = activeDataId ?? "";
+  ui.towerTitle.textContent = art.name;
+  ui.towerSub.textContent = `${art.blurb} · ${data.name}`;
 }
 
-/** Paints whatever the active scene's apply() last returned. */
+/**
+ * Points the cinematic reveal's title card at whichever data source is
+ * actually driving the output, instead of always introducing the piece as
+ * "Flight Garden" — beginIntro plays this text, but the copy itself has to
+ * be in place before that animation starts (it's a plain CSS keyframe with
+ * no per-frame JS hook of its own).
+ */
+function applyTitlecard(data) {
+  const copy = data.titlecard;
+  if (!copy) return;
+  if (ui.tcKicker) ui.tcKicker.textContent = copy.kicker;
+  if (ui.tcLine) ui.tcLine.textContent = copy.line;
+  if (ui.tcSub) ui.tcSub.textContent = copy.sub;
+}
+
+/** Paints whatever the active data source's apply() last returned. */
 function renderSceneReadout() {
   const r = sceneReadout;
 
@@ -3504,48 +3472,121 @@ function renderSceneReadout() {
   }
 }
 
-function buildSceneSelector() {
-  if (!ui.sceneSelect) return;
+/**
+ * The full-screen gate's current picks — DEFAULT_ART/DEFAULT_DATA to start,
+ * so a first-time visitor sees a reasonable combination already highlighted
+ * and can generate immediately, or pick different cards first.
+ */
+let gateArtId = DEFAULT_ART;
+let gateDataId = DEFAULT_DATA;
 
-  for (const id of sceneIds()) {
-    const option = document.createElement("option");
-    option.value = id;
-    option.textContent = SCENES[id].name;
-    option.title = SCENES[id].blurb;
-    ui.sceneSelect.appendChild(option);
+/** Every art id not locked to one specific data source — the pool Weather/Attendance choose from. */
+const generalArtIds = () => artIds().filter((id) => !ART_OPTIONS[id].exclusiveTo);
+
+/** Marks whichever card in a gate column matches `selectedId`, and no other. */
+function paintGateSelection(container, selectedId) {
+  if (!container) return;
+  for (const btn of container.children) {
+    btn.classList.toggle("selected", btn.dataset.id === selectedId);
+  }
+}
+
+function buildGateColumn(container, ids, registry, onPick) {
+  if (!container) return;
+  container.innerHTML = "";
+  for (const id of ids) {
+    const entry = registry[id];
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "gate-option";
+    btn.dataset.id = id;
+    btn.innerHTML = `<span class="gate-option-name">${entry.name}</span>`;
+    btn.addEventListener("click", () => {
+      onPick(id);
+      paintGateSelection(container, id);
+    });
+    container.appendChild(btn);
+  }
+}
+
+/**
+ * Rebuilds the ART column for whatever DATA is currently picked. Flight
+ * locks it to its one fixed render — a single, non-interactive card rather
+ * than a column of choices with only one real option — while every other
+ * data source gets the ordinary clickable pool (see generalArtIds).
+ */
+function renderGateArtColumn() {
+  if (!ui.gateArtOptions) return;
+
+  const fixedArtId = DATA_SOURCES[gateDataId]?.fixedArtId;
+  if (fixedArtId) {
+    gateArtId = fixedArtId;
+    const art = ART_OPTIONS[fixedArtId];
+    ui.gateArtOptions.innerHTML = "";
+    const card = document.createElement("div");
+    card.className = "gate-option selected gate-option-locked";
+    card.dataset.id = fixedArtId;
+    card.innerHTML = `<span class="gate-option-name">${art.name}</span>`;
+    ui.gateArtOptions.appendChild(card);
+    return;
   }
 
-  ui.sceneSelect.value = DEFAULT_SCENE;
+  const pool = generalArtIds();
+  if (!pool.includes(gateArtId)) gateArtId = pool[0];
+  buildGateColumn(ui.gateArtOptions, pool, ART_OPTIONS, (id) => { gateArtId = id; });
+  paintGateSelection(ui.gateArtOptions, gateArtId);
+}
 
-  ui.sceneSelect.addEventListener("change", (e) => {
-    const id = e.target.value;
+/**
+ * Builds the full-screen intro gate — a DATA column and an ART column — and
+ * wires its Generate button. Nothing plays until Generate is pressed: this
+ * gate is the only thing on screen at boot, fully covering the stage, and
+ * hides itself once the chosen combination has been handed to
+ * activateOutput.
+ */
+function buildIntroGate() {
+  buildGateColumn(ui.gateDataOptions, dataSourceIds(), DATA_SOURCES, (id) => {
+    gateDataId = id;
+    renderGateArtColumn();
+  });
+  paintGateSelection(ui.gateDataOptions, gateDataId);
+  renderGateArtColumn();
 
-    // Same breath of darkness the airport switch uses, so a scene change
-    // reads as a deliberate cut rather than a glitch.
-    ui.veil.classList.add("switching");
-    ui.veil.classList.remove("lifted");
+  ui.gateGenerateBtn?.addEventListener("click", () => {
+    ui.introGate?.classList.add("gate-hidden");
+    if (ui.hudToggleBtn) ui.hudToggleBtn.hidden = false;
 
-    setTimeout(async () => {
-      // Awaited: activateScene doesn't resolve until its render is loaded
-      // AND correctly coloured, so the veil hides the whole load — a new
-      // clip (or a network-bound one, like the weather scene's) never gets
-      // exposed mid-fetch or on a placeholder colour.
-      await activateScene(id);
-      ui.veil.classList.remove("switching");
-      ui.veil.classList.add("lifted");
-    }, 300);
+    // Not awaited here — the gate has already handed off, so the rest of
+    // BOOT's reveal takes over. Same fallback beginIntro always relied on:
+    // if the render is slow (or blocked, e.g. file:// CORS) the piece still
+    // reveals itself instead of sitting behind a veil that never lifts.
+    activateOutput(gateArtId, gateDataId).finally(beginIntro);
+    setTimeout(beginIntro, 2500);
+  });
+
+  // "New Output", in the tower panel — brings the gate back so a different
+  // Data + Art combination can be picked without a page reload. The current
+  // output keeps running underneath (activateOutput already tears it down
+  // cleanly the moment Generate fires again), so re-opening the gate itself
+  // needs nothing beyond showing it and re-syncing its cards to whatever is
+  // still selected from last time.
+  ui.newOutputBtn?.addEventListener("click", () => {
+    if (ui.hudToggleBtn) ui.hudToggleBtn.hidden = true;
+    paintGateSelection(ui.gateDataOptions, gateDataId);
+    renderGateArtColumn();
+    ui.introGate?.classList.remove("gate-hidden");
   });
 }
 
 /**
  * Wires the weather panel's temp/wind fields and Realtime button. Typing a
  * value into either engages manualReading and re-applies it immediately, so
- * the hue/speed change is visible without waiting on pollScene's interval;
+ * the hue/speed change is visible without waiting on pollData's interval;
  * Realtime clears it and forces one live poll to hand control straight back.
  */
 function wireWeatherManualControls() {
   const applyManual = () => {
-    if (!activeSceneId || !ui.manualTemp || !ui.manualWind) return;
+    if (!activeDataId || !ui.manualTemp || !ui.manualWind) return;
 
     const tempC = Number(ui.manualTemp.value);
     const kph = Number(ui.manualWind.value);
@@ -3555,7 +3596,7 @@ function wireWeatherManualControls() {
 
     manualReading = { tempC, kph };
     if (ui.realtimeBtn) ui.realtimeBtn.disabled = false;
-    pollScene(activeSceneId);
+    pollData(activeDataId);
   };
 
   ui.manualTemp?.addEventListener("input", applyManual);
@@ -3564,15 +3605,15 @@ function wireWeatherManualControls() {
   ui.realtimeBtn?.addEventListener("click", () => {
     manualReading = null;
     ui.realtimeBtn.disabled = true;
-    if (activeSceneId) pollScene(activeSceneId);
+    if (activeDataId) pollData(activeDataId);
   });
 }
 
 /**
- * Builds the weather scene's country/city picker and wires it: choosing a
- * place points selectedLocationId (read by pollScene, see its
+ * Builds the wind data source's country/city picker and wires it: choosing
+ * a place points selectedLocationId (read by pollData, see its
  * locationParam branch) at the new id, drops any manual override so the
- * scene shows that place's actual weather rather than stale numbers, and
+ * output shows that place's actual weather rather than stale numbers, and
  * polls immediately instead of waiting for the 5-minute interval.
  */
 function buildLocationSelector() {
@@ -3592,7 +3633,7 @@ function buildLocationSelector() {
     manualReading = null;
     if (ui.realtimeBtn) ui.realtimeBtn.disabled = true;
 
-    if (activeSceneId) pollScene(activeSceneId);
+    if (activeDataId) pollData(activeDataId);
   });
 }
 
@@ -3638,6 +3679,7 @@ function beginIntro() {
   introStarted = true;
   introStartedAt = performance.now();
   requestAnimationFrame(() => ui.veil.classList.add("lifted"));
+  ui.titlecard?.classList.add("playing");
 }
 
 /**
@@ -3771,12 +3813,18 @@ function initHUDToggle() {
   const toggleBtn = document.createElement("button");
   toggleBtn.type = "button";
   toggleBtn.className = "hud-toggle-btn hud-active-btn";
+  // Its own z-index sits above the intro gate on purpose (so it can toggle
+  // the HUD over any output once one is up) — hidden here so it doesn't
+  // float above the gate before Generate has even been pressed. The gate's
+  // Generate handler unhides it.
+  toggleBtn.hidden = true;
 
   const label = document.createElement("span");
   label.textContent = "HIDE UI";
   toggleBtn.appendChild(label);
 
   document.body.appendChild(toggleBtn);
+  ui.hudToggleBtn = toggleBtn;
 
   const toggleHUD = () => {
     const isActive = hud.classList.toggle("hud-active");
@@ -3893,7 +3941,7 @@ function animate() {
 ui.select.value = "BLR";
 clearDetail();
 
-buildSceneSelector();
+buildIntroGate();
 wireWeatherManualControls();
 buildLocationSelector();
 
@@ -3901,11 +3949,8 @@ initHUDToggle();
 initPostProcessing();
 animate();
 
-// activateScene seeds the airport, points the plane at the scene's render and
-// starts its feed. It is safe to call now: `ui` is initialised above.
-loadGarden().finally(() => {
-  beginIntro();
-});
-
-// If the texture is slow (or blocked by file:// CORS), still reveal the piece.
-setTimeout(beginIntro, 2500);
+// Nothing plays until the intro gate's Generate button fires — see
+// buildIntroGate. It calls activateOutput (which seeds the airport, points
+// the plane at the chosen art's render and starts the data source's feed)
+// followed by beginIntro, with its own fallback timer in case the render is
+// slow or blocked.

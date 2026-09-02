@@ -104,21 +104,23 @@ function presignR2Get(env, key, expiresInSeconds = 6 * 60 * 60) {
  * string would let anyone holding the URL mint a signed link to *any* object
  * in the bucket. Ids come in, keys go out — never the other way round.
  *
- * The browser-side half of this table is SCENES in main.js; the ids must
- * match. The three weather clips are the blue/green/red renders, one per
- * temperature band (see SCENES.weather.art.bands in main.js).
+ * The browser-side half of this table is ART_OPTIONS in main.js; the ids
+ * must match.
  */
 const VIDEO_KEYS = {
-  'flight-garden': 'flight-simulation/4k_render_final_001.mp4',
+  // Fixed to the Flight data source — nothing else ever requests this id.
+  art1: 'flight-simulation/4k_render_final_001.mp4',
 
-  // The weather scene used to swap between three separately-rendered clips
-  // (cold/mild/warm). It now tints this one red render's hue in the shader
-  // instead (see LivingGarden.setHueShift in main.js), so only one video is
-  // needed for the whole temperature range.
-  'weather-warm': 'flight-simulation/weather_warm.mp4',
+  // The general-purpose pool Weather/Attendance pick from. art2's key keeps
+  // its original upload name (2kwithoutflowers.mp4) rather than being
+  // re-uploaded under a new one — same bytes, just a different id pointing
+  // at them.
+  art2: 'flight-simulation/2kwithoutflowers.mp4',
+  art3: 'flight-simulation/ART3.mp4',
+  art4: 'flight-simulation/weather_warm.mp4',
 };
 
-const DEFAULT_VIDEO_ID = 'flight-garden';
+const DEFAULT_VIDEO_ID = 'art1';
 
 /** Resolves a request's ?id= to an R2 key, or null if it is not allowlisted. */
 function resolveVideoKey(id) {

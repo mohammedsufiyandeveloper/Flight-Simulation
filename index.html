@@ -31,6 +31,32 @@
 <body class="hud-active">
 
   <!-- ============================================================
+       INTRO GATE : full-screen, pre-video — pick the data, pick the
+       art, then Generate. Nothing plays until this is dismissed.
+  ============================================================ -->
+  <div class="intro-gate" id="introGate">
+    <div class="panel gate-panel">
+      <span class="gate-kicker">Data Art</span>
+      <h1 class="gate-title">Choose your output</h1>
+      <p class="gate-sub">Pick the data to map, and the art to map it onto.</p>
+
+      <div class="gate-columns">
+        <section class="gate-col" aria-label="Data">
+          <h2 class="gate-col-title">Data</h2>
+          <div class="gate-options" id="gateDataOptions"></div>
+        </section>
+
+        <section class="gate-col" aria-label="Art">
+          <h2 class="gate-col-title">Art</h2>
+          <div class="gate-options" id="gateArtOptions"></div>
+        </section>
+      </div>
+
+      <button type="button" id="gateGenerateBtn" class="generate-btn gate-generate">Generate</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
        STAGE : the visualization is the first and only screen
   ============================================================ -->
   <div class="stage">
@@ -45,15 +71,6 @@
   <main class="hud hud-active">
     <div class="panel hud-panel" id="hudPanel">
 
-      <!-- Which visualization is on screen -->
-      <section class="hp-block scene" id="scenePanel">
-        <h2 class="eyebrow">Visualization</h2>
-        <label class="select-wrap">
-          <span class="sr-only">Select visualization</span>
-          <select id="sceneSelect"></select>
-        </label>
-      </section>
-
       <!-- Tower / airport selector -->
       <section class="hp-block tower" id="towerPanel">
         <div class="tower-head">
@@ -61,6 +78,8 @@
           <h1 class="tower-title" id="towerTitle">BLR Garden Tower</h1>
         </div>
         <p class="tower-sub" id="towerSub">Live Traffic · Kempegowda Intl</p>
+
+        <button type="button" id="newOutputBtn" class="unpin new-output-btn">New Output</button>
 
         <label class="select-wrap">
           <span class="sr-only">Select airport</span>
@@ -88,7 +107,7 @@
         </div>
       </section>
 
-      <!-- Live weather readout (weather scene only) -->
+      <!-- Live weather readout (Weather data source only) -->
       <section class="hp-block weather-block" id="weatherPanel" hidden>
         <label class="select-wrap location-select-wrap">
           <span class="sr-only">Select location</span>
@@ -121,7 +140,7 @@
         </div>
       </section>
 
-      <!-- Live attendance readout (attendance scene only) -->
+      <!-- Live attendance readout (Attendance data source only) -->
       <section class="hp-block attendance-block" id="attendancePanel" hidden>
         <div class="stats stats-3">
           <div class="stat" data-kind="present">
@@ -184,9 +203,9 @@
   <!-- Cinematic intro -->
   <div class="veil" id="veil" aria-hidden="true"></div>
   <div class="titlecard" id="titlecard">
-    <span class="tc-kicker">Flight Garden</span>
-    <span class="tc-line">An airport, rendered as a living garden</span>
-    <span class="tc-sub">Butterflies are flights · Flowers are terminals</span>
+    <span class="tc-kicker" id="tcKicker"></span>
+    <span class="tc-line" id="tcLine"></span>
+    <span class="tc-sub" id="tcSub"></span>
   </div>
 
   <script type="module" src="main.js"></script>
