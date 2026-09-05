@@ -709,9 +709,13 @@ class LivingGarden {
    * untouched). Sets where the hue is headed, not where it is — update()
    * eases the displayed value toward this each frame, so a new reading
    * fades the garden into its new colour rather than snapping to it.
+   * Pass immediate = true to jump instantly without easing (e.g. at boot).
    */
-  setHueShift(turns) {
+  setHueShift(turns, immediate = false) {
     this.hueTarget = turns;
+    if (immediate && this.material?.uniforms?.uHueShift) {
+      this.material.uniforms.uHueShift.value = turns;
+    }
   }
 
   /** Turns the shader's three-colour attendance blend on or off. */
@@ -966,7 +970,9 @@ const VIDEO_PATHS = {
   art1: "flight-simulation/4k_render_final_001.mp4",
   art2: "flight-simulation/2kwithoutflowers.mp4",
   art3: "flight-simulation/ART3.mp4",
-  art4: "flight-simulation/weather_warm.mp4"
+  art4: "flight-simulation/weather_warm.mp4",
+  art5: "flight-simulation/art.mp4",
+  art6: "flight-simulation/vid.mp4"
 };
 
 /**
@@ -1151,10 +1157,13 @@ const ART_OPTIONS = {
   // Flight's own render — see DATA_SOURCES.flight.fixedArtId. exclusiveTo
   // is what pulls it out of the general pool the gate offers under
   // Weather/Attendance (see the general-pool filter in renderGateArtColumn).
-  art1: { name: "ART 1", blurb: "The original flight-garden render", videoId: "art1", exclusiveTo: "flight" },
-  art2: { name: "ART 2", blurb: "The bare garden, without its flowers", videoId: "art2" },
-  art3: { name: "ART 3", blurb: "A third garden render", videoId: "art3" },
-  art4: { name: "ART 4", blurb: "The warm, tintable garden render", videoId: "art4" }
+  // nativeHue represents the art's baseline hue on the color wheel (0 = Red, 1/3 = Green 120°).
+  art1: { name: "ART 1", blurb: "The original flight-garden render", videoId: "art1", exclusiveTo: "flight", nativeHue: 0 },
+  art2: { name: "ART 2", blurb: "The bare garden, without its flowers", videoId: "art2", nativeHue: 1 / 3 },
+  art3: { name: "ART 3", blurb: "A third garden render", videoId: "art3", nativeHue: 1 / 3 },
+  art4: { name: "ART 4", blurb: "The warm, tintable garden render", videoId: "art4", nativeHue: 0 },
+  art5: { name: "ART 5", blurb: "A new garden render", videoId: "art5", nativeHue: 1 / 3 },
+  art6: { name: "ART 6", blurb: "A new garden render", videoId: "art6", nativeHue: 1 / 3 }
 };
 
 /**
@@ -1604,9 +1613,16 @@ function dataContext() {
       if (gardenVideoEl) gardenVideoEl.playbackRate = rate;
     },
 
-    /** Rotates the current render's hue — turns is 0..1 around the wheel. */
-    setHue(turns) {
-      livingGarden?.setHueShift(turns);
+    /**
+     * Rotates the current render's hue so its displayed tone matches
+     * targetTurns on the color wheel, compensating for the active art's native hue.
+     */
+    setHue(targetTurns, immediate = false) {
+      const nativeHue = ART_OPTIONS[activeArtId]?.nativeHue ?? 0;
+      let shift = (targetTurns - nativeHue) % 1;
+      if (shift > 0.5) shift -= 1;
+      if (shift <= -0.5) shift += 1;
+      livingGarden?.setHueShift(shift, immediate);
     },
 
     /**
@@ -1706,12 +1722,18 @@ async function activateOutput(artId, dataId) {
 
   await setGardenVideo(art.videoId);
 
-  // Opens unshifted — the render's own native colour — rather than guessing
-  // a tint. It's an instant no-op default that's always a real,
-  // correct-looking frame; startDataPolling below is awaited, so this is
-  // what shows for at most one reading's latency, never as a lingering
-  // wrong-coloured flash.
-  livingGarden?.setHueShift(0);
+  // Pre-seed shader hue & attendance mix immediately for this output
+  if (data.tintMode === "hue") {
+    const defaultTemp = manualReading?.tempC ?? 27;
+    const targetTurns = hueForTemp(defaultTemp, WIND_THERMAL.anchors);
+    const nativeHue = art.nativeHue ?? 0;
+    let shift = (targetTurns - nativeHue) % 1;
+    if (shift > 0.5) shift -= 1;
+    if (shift <= -0.5) shift += 1;
+    livingGarden?.setHueShift(shift, true);
+  } else {
+    livingGarden?.setHueShift(0, true);
+  }
   livingGarden?.setAttendanceShares(0, 0);
   livingGarden?.setAttendanceMix(data.tintMode === "attendance");
 
@@ -3196,6 +3218,20 @@ const ui = {
   gateDataOptions: document.getElementById("gateDataOptions"),
   gateArtOptions: document.getElementById("gateArtOptions"),
   gateGenerateBtn: document.getElementById("gateGenerateBtn"),
+  gatePreviewSection: document.getElementById("gatePreviewSection"),
+  gatePreviewArtTitle: document.getElementById("gatePreviewArtTitle"),
+  gatePreviewArtBlurb: document.getElementById("gatePreviewArtBlurb"),
+  gateVideoPlayerFrame: document.getElementById("gateVideoPlayerFrame"),
+  gateMainPreviewVideo: document.getElementById("gateMainPreviewVideo"),
+  gateVideoPlayBtn: document.getElementById("gateVideoPlayBtn"),
+  gateVideoLoader: document.getElementById("gateVideoLoader"),
+  gatePlayerControls: document.getElementById("gatePlayerControls"),
+  gateCtrlPlayPause: document.getElementById("gateCtrlPlayPause"),
+  gateTimelineWrap: document.getElementById("gateTimelineWrap"),
+  gateTimelineBar: document.getElementById("gateTimelineBar"),
+  gateTimelineProgress: document.getElementById("gateTimelineProgress"),
+  gateTimeDisplay: document.getElementById("gateTimeDisplay"),
+  gateCtrlMute: document.getElementById("gateCtrlMute"),
 
   // output switching
   towerPanel: document.getElementById("towerPanel"),
@@ -3483,15 +3519,189 @@ let gateDataId = DEFAULT_DATA;
 /** Every art id not locked to one specific data source — the pool Weather/Attendance choose from. */
 const generalArtIds = () => artIds().filter((id) => !ART_OPTIONS[id].exclusiveTo);
 
-/** Marks whichever card in a gate column matches `selectedId`, and no other. */
+/**
+ * Marks whichever card in a gate column matches `selectedId`, and no other.
+ * The selected art card's preview keeps playing so the currently-chosen
+ * render stays visible; every other card's preview pauses unless a pointer
+ * is still over it (pointerleave handles that case itself).
+ */
 function paintGateSelection(container, selectedId) {
   if (!container) return;
   for (const btn of container.children) {
-    btn.classList.toggle("selected", btn.dataset.id === selectedId);
+    const isSelected = btn.dataset.id === selectedId;
+    btn.classList.toggle("selected", isSelected);
+    const video = btn.querySelector(".gate-option-preview");
+    if (!video) continue;
+    if (isSelected) playGatePreview(video);
+    else if (!btn.matches(":hover")) video.pause();
   }
 }
 
-function buildGateColumn(container, ids, registry, onPick) {
+/**
+ * Formats seconds into clean m:ss timestamp display for video controls.
+ */
+function formatVideoTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s < 10 ? "0" : ""}${s}`;
+}
+
+/**
+ * Toggles play/pause on the main video preview player in the intro gate.
+ */
+function toggleGateVideoPlayback() {
+  const video = ui.gateMainPreviewVideo;
+  if (!video) return;
+  if (video.paused) {
+    video.play().catch(() => {});
+  } else {
+    video.pause();
+  }
+}
+
+/**
+ * Updates the active art video and metadata in the main gate preview player.
+ */
+function updateGateMainPreview(artId) {
+  const art = ART_OPTIONS[artId];
+  if (!art) return;
+
+  if (ui.gatePreviewArtTitle) ui.gatePreviewArtTitle.textContent = art.name;
+  if (ui.gatePreviewArtBlurb) ui.gatePreviewArtBlurb.textContent = art.blurb || "";
+
+  const video = ui.gateMainPreviewVideo;
+  if (!video) return;
+
+  // Apply preview tint if Weather is selected so preview accurately reflects rendered colors
+  if (gateDataId === "weather") {
+    const tempC = manualReading?.tempC ?? 27;
+    const targetTurns = hueForTemp(tempC, WIND_THERMAL.anchors);
+    const nativeHue = art.nativeHue ?? 0;
+    let shift = (targetTurns - nativeHue) % 1;
+    if (shift > 0.5) shift -= 1;
+    if (shift <= -0.5) shift += 1;
+    const deg = Math.round(shift * 360);
+    video.style.filter = `hue-rotate(${deg}deg)`;
+  } else {
+    video.style.filter = "none";
+  }
+
+  const targetSrc = ART.url(art.videoId);
+  if (video.dataset.videoId !== art.videoId) {
+    video.dataset.videoId = art.videoId;
+    if (ui.gateVideoLoader) ui.gateVideoLoader.hidden = false;
+    if (ui.gateTimelineProgress) ui.gateTimelineProgress.style.width = "0%";
+    if (ui.gateTimeDisplay) ui.gateTimeDisplay.textContent = "0:00 / 0:00";
+    video.src = targetSrc;
+    video.load();
+  }
+
+  video.play().then(() => {
+    ui.gateVideoPlayerFrame?.classList.add("is-playing");
+    if (ui.gateVideoLoader) ui.gateVideoLoader.hidden = true;
+  }).catch(() => {
+    // Autoplay restrictions or waiting on user gesture
+  });
+}
+
+/**
+ * Sets up event listeners and interactivity for the gate video preview player.
+ */
+let gatePlayerInitialized = false;
+function setupGateVideoPlayer() {
+  if (gatePlayerInitialized) return;
+  gatePlayerInitialized = true;
+
+  const video = ui.gateMainPreviewVideo;
+  if (!video) return;
+
+  // Click on big center button or controls play/pause button
+  ui.gateVideoPlayBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleGateVideoPlayback();
+  });
+
+  ui.gateCtrlPlayPause?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleGateVideoPlayback();
+  });
+
+  video.addEventListener("click", () => {
+    toggleGateVideoPlayback();
+  });
+
+  video.addEventListener("play", () => {
+    ui.gateVideoPlayerFrame?.classList.add("is-playing");
+  });
+
+  video.addEventListener("pause", () => {
+    ui.gateVideoPlayerFrame?.classList.remove("is-playing");
+  });
+
+  video.addEventListener("waiting", () => {
+    if (ui.gateVideoLoader) ui.gateVideoLoader.hidden = false;
+  });
+
+  video.addEventListener("playing", () => {
+    if (ui.gateVideoLoader) ui.gateVideoLoader.hidden = true;
+  });
+
+  video.addEventListener("canplay", () => {
+    if (ui.gateVideoLoader) ui.gateVideoLoader.hidden = true;
+  });
+
+  video.addEventListener("loadedmetadata", () => {
+    if (ui.gateVideoLoader) ui.gateVideoLoader.hidden = true;
+    const dur = video.duration || 0;
+    if (ui.gateTimeDisplay) {
+      ui.gateTimeDisplay.textContent = `0:00 / ${formatVideoTime(dur)}`;
+    }
+  });
+
+  video.addEventListener("timeupdate", () => {
+    const cur = video.currentTime || 0;
+    const dur = video.duration || 0;
+    const pct = dur > 0 ? (cur / dur) * 100 : 0;
+    if (ui.gateTimelineProgress) {
+      ui.gateTimelineProgress.style.width = `${pct}%`;
+    }
+    if (ui.gateTimeDisplay) {
+      ui.gateTimeDisplay.textContent = `${formatVideoTime(cur)} / ${formatVideoTime(dur)}`;
+    }
+  });
+
+  // Timeline scrub / seek
+  const handleSeek = (e) => {
+    if (!ui.gateTimelineWrap || !video.duration) return;
+    const rect = ui.gateTimelineWrap.getBoundingClientRect();
+    const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    video.currentTime = pos * video.duration;
+  };
+
+  ui.gateTimelineWrap?.addEventListener("click", handleSeek);
+
+  // Mute / Unmute
+  ui.gateCtrlMute?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    video.muted = !video.muted;
+    ui.gateVideoPlayerFrame?.classList.toggle("is-unmuted", !video.muted);
+  });
+}
+
+/**
+ * Lazily points a gate card's preview <video> at its render and plays it.
+ * `src` is set on first play rather than up front so opening the gate
+ * doesn't fetch every art option's video at once — only the ones a visitor
+ * actually hovers or selects.
+ */
+function playGatePreview(video) {
+  if (!video) return;
+  if (!video.src) video.src = ART.url(video.dataset.videoId);
+  video.play().catch(() => {});
+}
+
+function buildGateColumn(container, ids, registry, onPick, { preview = false } = {}) {
   if (!container) return;
   container.innerHTML = "";
   for (const id of ids) {
@@ -3500,11 +3710,26 @@ function buildGateColumn(container, ids, registry, onPick) {
     btn.type = "button";
     btn.className = "gate-option";
     btn.dataset.id = id;
-    btn.innerHTML = `<span class="gate-option-name">${entry.name}</span>`;
+    btn.innerHTML =
+      (preview
+        ? `<video class="gate-option-preview" data-video-id="${entry.videoId}" muted loop playsinline preload="none"></video>`
+        : "") + `<span class="gate-option-name">${entry.name}</span>`;
+    const video = preview ? btn.querySelector(".gate-option-preview") : null;
     btn.addEventListener("click", () => {
       onPick(id);
       paintGateSelection(container, id);
+      playGatePreview(video);
     });
+    if (video) {
+      btn.addEventListener("pointerenter", () => playGatePreview(video));
+      btn.addEventListener("focus", () => playGatePreview(video));
+      btn.addEventListener("pointerleave", () => {
+        if (!btn.classList.contains("selected")) video.pause();
+      });
+      btn.addEventListener("blur", () => {
+        if (!btn.classList.contains("selected")) video.pause();
+      });
+    }
     container.appendChild(btn);
   }
 }
@@ -3526,25 +3751,33 @@ function renderGateArtColumn() {
     const card = document.createElement("div");
     card.className = "gate-option selected gate-option-locked";
     card.dataset.id = fixedArtId;
-    card.innerHTML = `<span class="gate-option-name">${art.name}</span>`;
+    card.innerHTML =
+      `<video class="gate-option-preview" data-video-id="${art.videoId}" muted loop playsinline preload="none"></video>` +
+      `<span class="gate-option-name">${art.name}</span>`;
     ui.gateArtOptions.appendChild(card);
+    playGatePreview(card.querySelector(".gate-option-preview"));
+    updateGateMainPreview(fixedArtId);
     return;
   }
 
   const pool = generalArtIds();
   if (!pool.includes(gateArtId)) gateArtId = pool[0];
-  buildGateColumn(ui.gateArtOptions, pool, ART_OPTIONS, (id) => { gateArtId = id; });
+  buildGateColumn(ui.gateArtOptions, pool, ART_OPTIONS, (id) => {
+    gateArtId = id;
+    updateGateMainPreview(id);
+  }, { preview: true });
   paintGateSelection(ui.gateArtOptions, gateArtId);
+  updateGateMainPreview(gateArtId);
 }
 
 /**
- * Builds the full-screen intro gate — a DATA column and an ART column — and
- * wires its Generate button. Nothing plays until Generate is pressed: this
- * gate is the only thing on screen at boot, fully covering the stage, and
- * hides itself once the chosen combination has been handed to
- * activateOutput.
+ * Builds the full-screen intro gate — a DATA column, an ART column, and
+ * a live interactive video preview player — and wires its Generate button.
+ * Nothing plays in the main stage until Generate is pressed.
  */
 function buildIntroGate() {
+  setupGateVideoPlayer();
+
   buildGateColumn(ui.gateDataOptions, dataSourceIds(), DATA_SOURCES, (id) => {
     gateDataId = id;
     renderGateArtColumn();
@@ -3556,6 +3789,11 @@ function buildIntroGate() {
     ui.introGate?.classList.add("gate-hidden");
     if (ui.hudToggleBtn) ui.hudToggleBtn.hidden = false;
 
+    // The chosen render is about to play full-screen behind the gate —
+    // pause the main preview video and thumbnail previews.
+    ui.gateMainPreviewVideo?.pause();
+    ui.gateArtOptions?.querySelectorAll("video").forEach((v) => v.pause());
+
     // Not awaited here — the gate has already handed off, so the rest of
     // BOOT's reveal takes over. Same fallback beginIntro always relied on:
     // if the render is slow (or blocked, e.g. file:// CORS) the piece still
@@ -3565,15 +3803,12 @@ function buildIntroGate() {
   });
 
   // "New Output", in the tower panel — brings the gate back so a different
-  // Data + Art combination can be picked without a page reload. The current
-  // output keeps running underneath (activateOutput already tears it down
-  // cleanly the moment Generate fires again), so re-opening the gate itself
-  // needs nothing beyond showing it and re-syncing its cards to whatever is
-  // still selected from last time.
+  // Data + Art combination can be picked without a page reload.
   ui.newOutputBtn?.addEventListener("click", () => {
     if (ui.hudToggleBtn) ui.hudToggleBtn.hidden = true;
     paintGateSelection(ui.gateDataOptions, gateDataId);
     renderGateArtColumn();
+    updateGateMainPreview(gateArtId);
     ui.introGate?.classList.remove("gate-hidden");
   });
 }

@@ -510,7 +510,9 @@ body {
    thin-stroke card on faint ink-tinted glass — so a gate card and a sidebar
    dropdown read as the same control language. */
 .gate-option {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   padding: 12px 16px;
   border: 1px solid var(--stroke);
   border-radius: var(--radius-sm);
@@ -520,6 +522,20 @@ body {
   font-family: var(--font);
   cursor: pointer;
   transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+/* Art cards only (DATA has none) — a muted, looping thumbnail of that
+   render so a visitor can see what they're picking before Generate.
+   preload="none" on the element itself keeps the browser from fetching
+   every option's video up front; only hover/selection triggers a load. */
+.gate-option-preview {
+  width: 64px;
+  height: 40px;
+  flex: none;
+  border-radius: calc(var(--radius-sm) - 4px);
+  border: 1px solid var(--stroke);
+  background: rgba(15, 23, 32, 0.35);
+  object-fit: cover;
 }
 
 .gate-option:hover {
@@ -543,6 +559,310 @@ body {
    never a <button>, but this belt-and-suspenders in case that changes). */
 .gate-option-locked {
   cursor: default;
+}
+
+/* =============================================================
+   LIVE VIDEO PREVIEW SECTION (Intro Gate & New Output)
+   ============================================================= */
+
+.gate-preview-section {
+  margin-top: 14px;
+  margin-bottom: 28px;
+  padding: 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(15, 23, 32, 0.04);
+  border: 1px solid var(--stroke);
+  text-align: left;
+  transition: border-color 0.3s ease;
+}
+
+.gate-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.gate-preview-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gate-preview-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cyan-panel);
+  background: rgba(11, 117, 148, 0.12);
+  border: 1px solid rgba(11, 117, 148, 0.25);
+  border-radius: 999px;
+}
+
+.gate-preview-badge::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cyan-panel);
+  animation: preview-pulse-dot 2s infinite ease-in-out;
+}
+
+@keyframes preview-pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+.gate-preview-art-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--text);
+}
+
+.gate-preview-art-blurb {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+/* 16:9 Video Player Frame */
+.gate-video-player-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 380px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  overflow: hidden;
+  background: #020406;
+  border: 1px solid rgba(15, 23, 32, 0.2);
+  box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gate-main-preview-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  cursor: pointer;
+}
+
+/* Center Play / Pause Floating Overlay Button */
+.gate-video-play-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(1);
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(15, 23, 32, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 5;
+  transition: opacity 0.25s ease, transform 0.25s ease, background 0.2s ease;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+}
+
+.gate-video-play-btn:hover {
+  background: rgba(11, 117, 148, 0.85);
+  border-color: rgba(98, 220, 255, 0.6);
+  transform: translate(-50%, -50%) scale(1.08);
+}
+
+.gate-video-play-btn:active {
+  transform: translate(-50%, -50%) scale(0.95);
+}
+
+.gate-video-play-btn .gate-play-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.gate-video-play-btn .pause-icon {
+  display: none;
+}
+
+.gate-video-player-frame.is-playing .gate-video-play-btn {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.gate-video-player-frame.is-playing:hover .gate-video-play-btn {
+  opacity: 0.85;
+  pointer-events: auto;
+}
+
+.gate-video-player-frame.is-playing .gate-video-play-btn .play-icon {
+  display: none;
+}
+
+.gate-video-player-frame.is-playing .gate-video-play-btn .pause-icon {
+  display: block;
+}
+
+/* Loading Spinner */
+.gate-video-loader {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(2, 4, 6, 0.7);
+  backdrop-filter: blur(6px);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  z-index: 6;
+  transition: opacity 0.2s ease;
+}
+
+.gate-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Bottom Glass Controls Bar */
+.gate-player-controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: linear-gradient(180deg, transparent 0%, rgba(2, 4, 6, 0.85) 60%, rgba(2, 4, 6, 0.95) 100%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 4;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.gate-ctrl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+}
+
+.gate-ctrl-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.gate-ctrl-btn:active {
+  transform: scale(0.92);
+}
+
+.gate-ctrl-btn .ctrl-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.gate-ctrl-btn .icon-pause {
+  display: none;
+}
+
+.gate-video-player-frame.is-playing .gate-ctrl-btn .icon-play {
+  display: none;
+}
+
+.gate-video-player-frame.is-playing .gate-ctrl-btn .icon-pause {
+  display: block;
+}
+
+.gate-ctrl-btn .icon-unmuted {
+  display: none;
+}
+
+.gate-video-player-frame.is-unmuted #gateCtrlMute .icon-muted {
+  display: none;
+}
+
+.gate-video-player-frame.is-unmuted #gateCtrlMute .icon-unmuted {
+  display: block;
+}
+
+/* Timeline / Seek Bar */
+.gate-timeline-wrap {
+  flex: 1;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  outline: none;
+}
+
+.gate-timeline-bar {
+  width: 100%;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.2);
+  position: relative;
+  overflow: hidden;
+  transition: height 0.15s ease;
+}
+
+.gate-timeline-wrap:hover .gate-timeline-bar {
+  height: 7px;
+}
+
+.gate-timeline-progress {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: linear-gradient(90deg, var(--cyan-panel) 0%, var(--cyan) 100%);
+  border-radius: 3px;
+  transition: width 0.08s linear;
+}
+
+/* Time Display */
+.gate-time-display {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.82);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  user-select: none;
 }
 
 .gate-generate {

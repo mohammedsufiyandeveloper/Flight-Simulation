@@ -118,6 +118,8 @@ const VIDEO_KEYS = {
   art2: 'flight-simulation/2kwithoutflowers.mp4',
   art3: 'flight-simulation/ART3.mp4',
   art4: 'flight-simulation/weather_warm.mp4',
+  art5: 'flight-simulation/art.mp4',
+  art6: 'flight-simulation/vid.mp4',
 };
 
 const DEFAULT_VIDEO_ID = 'art1';

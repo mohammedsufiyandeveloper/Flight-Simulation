@@ -223,6 +223,10 @@ const server = http.createServer((req, res) => {
     };
     if (isStaticImage) {
       headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+    } else {
+      headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+      headers['Pragma'] = 'no-cache';
+      headers['Expires'] = '0';
     }
     res.writeHead(200, headers);
     fs.createReadStream(absolutePath).pipe(res);
