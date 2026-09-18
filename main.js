@@ -217,7 +217,7 @@ const renderer = new THREE.WebGLRenderer({
   antialias: true,
   powerPreference: "high-performance"
 });
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 // Pure black: the bloom pass encodes the clear colour on its way out, so any
@@ -3533,7 +3533,7 @@ function paintGateSelection(container, selectedId) {
     const video = btn.querySelector(".gate-option-preview");
     if (!video) continue;
     if (isSelected) playGatePreview(video);
-    else if (!btn.matches(":hover")) video.pause();
+    else if (!btn.matches(":hover")) stopGatePreview(video);
   }
 }
 
@@ -3701,6 +3701,22 @@ function playGatePreview(video) {
   video.play().catch(() => {});
 }
 
+/**
+ * Pausing alone doesn't stop a <video> with a src set from continuing to
+ * buffer in the background — so hovering across several gate thumbnails in a
+ * row was leaving each one's full-res download running, all competing for
+ * bandwidth, which is why every preview looked stuck "loading". Clearing the
+ * src aborts the in-flight fetch; playGatePreview re-sets it on the next hover.
+ */
+function stopGatePreview(video) {
+  if (!video) return;
+  video.pause();
+  if (video.src) {
+    video.removeAttribute("src");
+    video.load();
+  }
+}
+
 function buildGateColumn(container, ids, registry, onPick, { preview = false } = {}) {
   if (!container) return;
   container.innerHTML = "";
@@ -3724,10 +3740,10 @@ function buildGateColumn(container, ids, registry, onPick, { preview = false } =
       btn.addEventListener("pointerenter", () => playGatePreview(video));
       btn.addEventListener("focus", () => playGatePreview(video));
       btn.addEventListener("pointerleave", () => {
-        if (!btn.classList.contains("selected")) video.pause();
+        if (!btn.classList.contains("selected")) stopGatePreview(video);
       });
       btn.addEventListener("blur", () => {
-        if (!btn.classList.contains("selected")) video.pause();
+        if (!btn.classList.contains("selected")) stopGatePreview(video);
       });
     }
     container.appendChild(btn);
@@ -4019,8 +4035,9 @@ function resize() {
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
 
-  // Use native screen pixel ratio and resolution for perfect native crispness
-  renderer.setPixelRatio(window.devicePixelRatio);
+  // Capped at 2x: beyond that the texture-upload cost (see the video-lag
+  // diagnostics below) grows faster than the crispness is worth.
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(w, h, false);
   if (composer) composer.setSize(w, h);
 
