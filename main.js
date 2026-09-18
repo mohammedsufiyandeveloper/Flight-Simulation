@@ -3521,19 +3521,16 @@ const generalArtIds = () => artIds().filter((id) => !ART_OPTIONS[id].exclusiveTo
 
 /**
  * Marks whichever card in a gate column matches `selectedId`, and no other.
- * The selected art card's preview keeps playing so the currently-chosen
- * render stays visible; every other card's preview pauses unless a pointer
- * is still over it (pointerleave handles that case itself).
+ * Thumbnails never carry their own video (see buildGateColumn) — the
+ * selected art's render streams once, in the main preview player next to
+ * this column — so this just paints the selection state and, defensively,
+ * makes sure no thumbnail is left holding a loaded video.
  */
 function paintGateSelection(container, selectedId) {
   if (!container) return;
   for (const btn of container.children) {
-    const isSelected = btn.dataset.id === selectedId;
-    btn.classList.toggle("selected", isSelected);
-    const video = btn.querySelector(".gate-option-preview");
-    if (!video) continue;
-    if (isSelected) playGatePreview(video);
-    else if (!btn.matches(":hover")) stopGatePreview(video);
+    btn.classList.toggle("selected", btn.dataset.id === selectedId);
+    stopGatePreview(btn.querySelector(".gate-option-preview"));
   }
 }
 
@@ -3695,18 +3692,13 @@ function setupGateVideoPlayer() {
  * doesn't fetch every art option's video at once — only the ones a visitor
  * actually hovers or selects.
  */
-function playGatePreview(video) {
-  if (!video) return;
-  if (!video.src) video.src = ART.url(video.dataset.videoId);
-  video.play().catch(() => {});
-}
-
 /**
- * Pausing alone doesn't stop a <video> with a src set from continuing to
- * buffer in the background — so hovering across several gate thumbnails in a
- * row was leaving each one's full-res download running, all competing for
- * bandwidth, which is why every preview looked stuck "loading". Clearing the
- * src aborts the in-flight fetch; playGatePreview re-sets it on the next hover.
+ * Thumbnails never autoplay on hover any more — hovering across several gate
+ * options used to load every one of them, all competing for bandwidth, which
+ * is why previews looked permanently stuck. Exactly one video is ever
+ * allowed to be loaded/playing at a time: the selected art's render, in the
+ * big main preview player (see updateGateMainPreview). A thumbnail only
+ * loads its own copy for the brief moment it's actually being clicked.
  */
 function stopGatePreview(video) {
   if (!video) return;
@@ -3730,22 +3722,10 @@ function buildGateColumn(container, ids, registry, onPick, { preview = false } =
       (preview
         ? `<video class="gate-option-preview" data-video-id="${entry.videoId}" muted loop playsinline preload="none"></video>`
         : "") + `<span class="gate-option-name">${entry.name}</span>`;
-    const video = preview ? btn.querySelector(".gate-option-preview") : null;
     btn.addEventListener("click", () => {
       onPick(id);
       paintGateSelection(container, id);
-      playGatePreview(video);
     });
-    if (video) {
-      btn.addEventListener("pointerenter", () => playGatePreview(video));
-      btn.addEventListener("focus", () => playGatePreview(video));
-      btn.addEventListener("pointerleave", () => {
-        if (!btn.classList.contains("selected")) stopGatePreview(video);
-      });
-      btn.addEventListener("blur", () => {
-        if (!btn.classList.contains("selected")) stopGatePreview(video);
-      });
-    }
     container.appendChild(btn);
   }
 }
@@ -3771,7 +3751,8 @@ function renderGateArtColumn() {
       `<video class="gate-option-preview" data-video-id="${art.videoId}" muted loop playsinline preload="none"></video>` +
       `<span class="gate-option-name">${art.name}</span>`;
     ui.gateArtOptions.appendChild(card);
-    playGatePreview(card.querySelector(".gate-option-preview"));
+    // Not played here: the main preview player (below) streams this exact
+    // video already — a locked, non-interactive card never needs its own copy.
     updateGateMainPreview(fixedArtId);
     return;
   }
