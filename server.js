@@ -119,6 +119,17 @@ function handleGardenVideoRequest(res, id) {
     return;
   }
 
+  // Local-dev only: a render sitting in assets/ under its R2 file name is
+  // served from disk, so a new render can be tried before it is uploaded.
+  // assets/*.mp4 is gitignored and never deployed, so production always
+  // goes to R2.
+  const localName = path.basename(key);
+  if (fs.existsSync(path.join(__dirname, 'assets', localName))) {
+    res.writeHead(302, { Location: `/assets/${encodeURIComponent(localName)}`, 'Cache-Control': 'no-store' });
+    res.end();
+    return;
+  }
+
   try {
     const url = presignR2Get({ ...env, ...process.env }, key, 6 * 60 * 60);
     res.writeHead(302, { Location: url, 'Cache-Control': 'private, max-age=3600' });

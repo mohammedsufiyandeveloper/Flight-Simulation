@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Velocity Map → 3-Zone Color Composite</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #fafbfc;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    color: #0a0d12;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 1.3rem; font-weight: 700; margin-bottom: 6px; letter-spacing: -0.3px; }
+  .sub { color: #6b7280; font-size: 0.82rem; margin-bottom: 20px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+  .panel {
+    background: #fff; border: 1px solid #e9ebef; border-radius: 14px;
+    padding: 14px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02), 0 4px 14px rgba(0,0,0,0.03);
+  }
+  .panel h2 {
+    font-size: 0.72rem; font-weight: 600; color: #6b7280;
+    text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px;
+  }
+  video {
+    width: 100%; aspect-ratio: 16/9; background: #0a0d12;
+    border-radius: 10px; display: block; object-fit: contain;
+  }
+  input[type="file"] { width: 100%; margin-top: 10px; font-size: 0.75rem; color: #6b7280; }
+
+  .output-panel {
+    background: #fff; border: 1px solid #e9ebef; border-radius: 14px;
+    padding: 14px; margin-bottom: 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02), 0 4px 14px rgba(0,0,0,0.03);
+  }
+  .output-header {
+    font-size: 0.72rem; color: #6b7280; text-transform: uppercase;
+    letter-spacing: 0.8px; margin-bottom: 10px; font-weight: 600;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  canvas#output {
+    width: 100%; aspect-ratio: 16/9; background: #0a0d12;
+    border-radius: 10px; display: block;
+  }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+  .color-box, .slider-box {
+    background: #fff; border: 1px solid #e9ebef; border-radius: 50px;
+    padding: 8px 16px; display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+  }
+  .color-box span, .slider-box span { font-size: 0.75rem; color: #4b5563; font-weight: 500; }
+  input[type="color"] { width: 32px; height: 32px; border: none; background: transparent; cursor: pointer; border-radius: 50%; padding: 0; }
+  input[type="color"]::-webkit-color-swatch { border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,0.08); }
+  input[type="range"] { width: 140px; accent-color: #DF2141; cursor: pointer; }
+
+  .val { font-size: 0.72rem; min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+
+  .zone-absent  span { color: #dc2626; }
+  .zone-late    span { color: #2563eb; }
+  .zone-present span { color: #DF2141; }
+
+  button {
+    background: #0a0d12; border: 1px solid #0a0d12; color: #fff;
+    padding: 9px 20px; border-radius: 50px; font-size: 0.82rem;
+    cursor: pointer; font-weight: 600; font-family: inherit;
+    transition: all 0.15s;
+  }
+  button:hover { background: #1f2937; }
+  button.primary { background: linear-gradient(135deg, #DF2141 0%, #a01830 100%); border: none; }
+  button.primary:hover { background: linear-gradient(135deg, #c91d3a 0%, #8a1428 100%); }
+
+  .note {
+    font-size: 0.72rem; color: #9ca3af; text-align: center;
+    margin-top: 20px; padding-top: 16px; border-top: 1px solid #e9ebef; line-height: 1.7;
+  }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>Velocity Map → 3-Zone Color Composite</h1>
+<p class="sub">Reads the velocity map's greyscale luminance, splits it into Absent / Late / Present zones, and composites the three colors over the greyscale main video.</p>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Main Video (greyscale)</h2>
+    <video id="mainVideo" muted playsinline preload="auto" loop></video>
+    <input type="file" id="mainUpload" accept="video/*">
+  </div>
+  <div class="panel">
+    <h2>Velocity Map</h2>
+    <video id="veloVideo" muted playsinline preload="auto" loop></video>
+    <input type="file" id="veloUpload" accept="video/*">
+  </div>
+</div>
+
+<div class="output-panel">
+  <div class="output-header">
+    <span>Output · real-time composite</span>
+    <span id="fpsBadge" style="font-size:0.7rem;color:#059669;font-weight:700;">-- fps</span>
+  </div>
+  <canvas id="output" width="1280" height="720"></canvas>
+</div>
+
+<div class="controls">
+  <div class="color-box zone-absent">
+    <span>Absent</span>
+    <input type="color" id="colorAbsent" value="#ae1e3b">
+  </div>
+  <div class="color-box zone-late">
+    <span>Late</span>
+    <input type="color" id="colorLate" value="#0e68a0">
+  </div>
+  <div class="color-box zone-present">
+    <span>Present</span>
+    <input type="color" id="colorPresent" value="#078f05">
+  </div>
+</div>
+
+<div class="controls">
+  <div class="slider-box zone-absent">
+    <span>Absent %</span>
+    <input type="range" id="rangeAbsent" min="0" max="100" step="1" value="61">
+    <span class="val" id="rangeAbsentVal">61%</span>
+  </div>
+  <div class="slider-box zone-late">
+    <span>Late %</span>
+    <input type="range" id="rangeLate" min="0" max="100" step="1" value="34">
+    <span class="val" id="rangeLateVal">34%</span>
+  </div>
+  <div class="slider-box zone-present">
+    <span>Present %</span>
+    <input type="range" id="rangePresent" min="0" max="100" step="1" value="5">
+    <span class="val" id="rangePresentVal">5%</span>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="playBtn" class="primary">▶ Play Both</button>
+  <button id="pauseBtn">⏸ Pause</button>
+  <button id="syncBtn">⟲ Sync &amp; Restart</button>
+  <button id="resetBtn">↺ Reset zones</button>
+</div>
+
+<div class="note">
+  Load both videos with the file pickers above. The velocity map's <b>luminance</b> (G+B averaged) drives the zone split.
+</div>
+
+<script>
+(() => {
+  // ============================================================
+  // DOM
+  // ============================================================
+  const mainVideo    = document.getElementById('mainVideo');
+  const veloVideo    = document.getElementById('veloVideo');
+  const mainUpload   = document.getElementById('mainUpload');
+  const veloUpload   = document.getElementById('veloUpload');
+  const outputCanvas = document.getElementById('output');
+  const fpsBadge     = document.getElementById('fpsBadge');
+
+  const colorAbsentInput  = document.getElementById('colorAbsent');
+  const colorLateInput    = document.getElementById('colorLate');
+  const colorPresentInput = document.getElementById('colorPresent');
+
+  const rangeAbsentSld  = document.getElementById('rangeAbsent');
+  const rangeLateSld    = document.getElementById('rangeLate');
+  const rangePresentSld = document.getElementById('rangePresent');
+  const rangeAbsentVal  = document.getElementById('rangeAbsentVal');
+  const rangeLateVal    = document.getElementById('rangeLateVal');
+  const rangePresentVal = document.getElementById('rangePresentVal');
+
+  const playBtn  = document.getElementById('playBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const syncBtn  = document.getElementById('syncBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  // ============================================================
+  // WebGL setup
+  // ============================================================
+  const gl = outputCanvas.getContext('webgl2', {
+    alpha: false, antialias: false, premultipliedAlpha: false,
+    preserveDrawingBuffer: false, desynchronized: true,
+    powerPreference: 'high-performance'
+  }) || outputCanvas.getContext('webgl', {
+    alpha: false, antialias: false, premultipliedAlpha: false,
+    preserveDrawingBuffer: false, desynchronized: true,
+    powerPreference: 'high-performance'
+  });
+
+  if (!gl) { alert('WebGL is required.'); return; }
+
+  // ============================================================
+  // Shaders
+  // ============================================================
+  const VS_SOURCE = `
+    attribute vec2 a_pos;
+    varying vec2 v_uv;
+    void main() {
+      v_uv = a_pos * 0.5 + 0.5;
+      gl_Position = vec4(a_pos, 0.0, 1.0);
+    }
+  `;
+
+  const FS_SOURCE = `
+    precision highp float;
+    varying vec2 v_uv;
+
+    uniform sampler2D u_main;      // greyscale main video
+    uniform sampler2D u_velo;      // velocity map
+    uniform vec3  u_cAbsent;       // low-velocity color
+    uniform vec3  u_cLate;         // mid-velocity color
+    uniform vec3  u_cPresent;      // high-velocity color
+    uniform float u_b1;            // Absent → Late boundary
+    uniform float u_b2;            // Late → Present boundary
+    uniform float u_softRange;     // smoothstep softness
+
+    void main() {
+      vec2 uv = v_uv;
+
+      // --- sample main + velocity ---
+      vec3 m = texture2D(u_main, uv).rgb;
+      vec3 v = texture2D(u_velo, uv).rgb;
+
+      // --- velocity luminance (grey = G+B averaged) ---
+      float lum = (v.g + v.b) * 0.5;
+
+      // --- split into 3 zones with two smoothstep boundaries ---
+      float t1 = smoothstep(u_b1 - u_softRange, u_b1 + u_softRange, lum);
+      float t2 = smoothstep(u_b2 - u_softRange, u_b2 + u_softRange, lum);
+
+      // --- interpolate the 3 colors ---
+      vec3 midC = mix(u_cAbsent, u_cLate, t1);   // Absent → Late
+      vec3 c    = mix(midC, u_cPresent, t2);     // (Absent/Late) → Present
+
+      // --- composite color over the greyscale main video ---
+      // blend strength scales with the highest zone weight
+      float blend = max(t1, t2);
+      vec3 result = mix(m, c, blend);
+
+      gl_FragColor = vec4(result, 1.0);
+    }
+  `;
+
+  function compileShader(type, source) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, source);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(sh));
+      return null;
+    }
+    return sh;
+  }
+
+  const vs = compileShader(gl.VERTEX_SHADER, VS_SOURCE);
+  const fs = compileShader(gl.FRAGMENT_SHADER, FS_SOURCE);
+  if (!vs || !fs) return;
+
+  const program = gl.createProgram();
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(program));
+    return;
+  }
+  gl.useProgram(program);
+
+  // fullscreen quad
+  const quadBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const a_pos = gl.getAttribLocation(program, 'a_pos');
+  gl.enableVertexAttribArray(a_pos);
+  gl.vertexAttribPointer(a_pos, 2, gl.FLOAT, false, 0, 0);
+
+  // uniforms
+  const U = {};
+  ['u_main','u_velo','u_cAbsent','u_cLate','u_cPresent','u_b1','u_b2','u_softRange']
+    .forEach(n => U[n] = gl.getUniformLocation(program, n));
+
+  // textures
+  function createTex(unit) {
+    const t = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                  new Uint8Array([0,0,0,255]));
+    return t;
+  }
+  const mainTex = createTex(0);
+  const veloTex = createTex(1);
+  gl.uniform1i(U.u_main, 0);
+  gl.uniform1i(U.u_velo, 1);
+
+  // ============================================================
+  // State
+  // ============================================================
+  let colorAbsent  = hexToRgb(colorAbsentInput.value);
+  let colorLate    = hexToRgb(colorLateInput.value);
+  let colorPresent = hexToRgb(colorPresentInput.value);
+
+  let wAbsent = 61, wLate = 34, wPresent = 5;
+
+  let mainReady = false, veloReady = false;
+  let running = false;
+  let lastFpsTime = performance.now();
+  let frameCount = 0;
+
+  let smoothB1 = 0.33, smoothB2 = 0.66, smoothInit = false;
+  let cachedB1 = 0.33, cachedB2 = 0.66, cachedSoftRange = 0.01;
+  let histFrameCounter = 0;
+  const HIST_RECOMPUTE_EVERY = 4;
+
+  const HIST = 128;
+  const HIST_W = 128, HIST_H = 72;
+  const histCanvas = document.createElement('canvas');
+  histCanvas.width = HIST_W; histCanvas.height = HIST_H;
+  const histCtx = histCanvas.getContext('2d', { willReadFrequently: true });
+
+  // ============================================================
+  // Helpers
+  // ============================================================
+  function hexToRgb(hex) {
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return m ? { r: parseInt(m[1],16), g: parseInt(m[2],16), b: parseInt(m[3],16) }
+             : { r: 0, g: 0, b: 0 };
+  }
+
+  // ============================================================
+  // Zone boundary computation from velocity histogram
+  // ============================================================
+  function computeBoundariesCached() {
+    if (histFrameCounter++ % HIST_RECOMPUTE_EVERY !== 0) {
+      return { b1: cachedB1, b2: cachedB2, softRange: cachedSoftRange };
+    }
+
+    try { histCtx.drawImage(veloVideo, 0, 0, HIST_W, HIST_H); }
+    catch(e) { return { b1: cachedB1, b2: cachedB2, softRange: cachedSoftRange }; }
+
+    let imgData;
+    try { imgData = histCtx.getImageData(0, 0, HIST_W, HIST_H); }
+    catch(e) { return { b1: cachedB1, b2: cachedB2, softRange: cachedSoftRange }; }
+
+    const px = imgData.data;
+    const hist = new Float32Array(HIST);
+    const total = HIST_W * HIST_H;
+
+    for (let p = 0; p < total; p++) {
+      const i = p * 4;
+      const lum = (px[i+1] + px[i+2]) * 0.5 / 255;
+      let bin = (lum * HIST) | 0;
+      if (bin < 0) bin = 0; else if (bin >= HIST) bin = HIST - 1;
+      hist[bin] += 1;
+    }
+
+    const cdf = new Float32Array(HIST);
+    let acc = 0;
+    for (let i = 0; i < HIST; i++) { acc += hist[i]; cdf[i] = acc; }
+
+    function pct(p) {
+      if (total === 0) return p;
+      p = Math.max(0, Math.min(1, p));
+      const target = p * total;
+      for (let i = 0; i < HIST; i++) {
+        if (cdf[i] >= target) {
+          const prev = i === 0 ? 0 : cdf[i-1];
+          const curr = cdf[i];
+          const frac = (target - prev) / Math.max(1, curr - prev);
+          return (i + frac) / HIST;
+        }
+      }
+      return 1;
+    }
+
+    const pA = wAbsent / 100;
+    const pL = wLate / 100;
+    const b1Raw = pct(pA);
+    const b2Raw = pct(pA + pL);
+
+    if (!smoothInit) { smoothB1 = b1Raw; smoothB2 = b2Raw; smoothInit = true; }
+    else {
+      smoothB1 = smoothB1 * 0.85 + b1Raw * 0.15;
+      smoothB2 = smoothB2 * 0.85 + b2Raw * 0.15;
+    }
+
+    let b1 = smoothB1;
+    let b2 = Math.max(b1 + 0.002, smoothB2);
+
+    const noA = wAbsent  <= 0, noP = wPresent <= 0, noL = wLate <= 0;
+    if (noA) b1 = 0;
+    if (noP) b2 = 1;
+    if (noL) b2 = b1;
+
+    const minZone = Math.max(0.001, Math.min(b1, b2 - b1, 1 - b2));
+    let softRange = Math.min(0.08, minZone * 0.25);
+    if (softRange < 0.0015) softRange = 0.0015;
+
+    cachedB1 = b1; cachedB2 = b2; cachedSoftRange = softRange;
+    return { b1, b2, softRange };
+  }
+
+  // ============================================================
+  // Render
+  // ============================================================
+  function render() {
+    if (!mainReady || !veloReady) return;
+    if (mainVideo.readyState < 2 || veloVideo.readyState < 2) return;
+
+    const { b1, b2, softRange } = computeBoundariesCached();
+
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, mainTex);
+    try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mainVideo); } catch(e) {}
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, veloTex);
+    try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, veloVideo); } catch(e) {}
+
+    gl.uniform3f(U.u_cAbsent,  colorAbsent.r/255,  colorAbsent.g/255,  colorAbsent.b/255);
+    gl.uniform3f(U.u_cLate,    colorLate.r/255,    colorLate.g/255,    colorLate.b/255);
+    gl.uniform3f(U.u_cPresent, colorPresent.r/255, colorPresent.g/255, colorPresent.b/255);
+
+    gl.uniform1f(U.u_b1, b1);
+    gl.uniform1f(U.u_b2, b2);
+    gl.uniform1f(U.u_softRange, softRange);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  function renderLoop() {
+    if (!running) return;
+    render();
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsTime >= 500) {
+      const fps = (frameCount * 1000) / (now - lastFpsTime);
+      fpsBadge.textContent = fps.toFixed(0) + ' fps';
+      frameCount = 0; lastFpsTime = now;
+    }
+    requestAnimationFrame(renderLoop);
+  }
+
+  // ============================================================
+  // Playback control
+  // ============================================================
+  function startPlayback() {
+    if (!mainReady || !veloReady) { setTimeout(startPlayback, 200); return; }
+    mainVideo.play().catch(()=>{});
+    veloVideo.play().catch(()=>{});
+    if (!running) { running = true; requestAnimationFrame(renderLoop); }
+  }
+  function pausePlayback() {
+    mainVideo.pause();
+    veloVideo.pause();
+    running = false;
+  }
+
+  playBtn.addEventListener('click', startPlayback);
+  pauseBtn.addEventListener('click', pausePlayback);
+  syncBtn.addEventListener('click', () => {
+    try { mainVideo.currentTime = 0; } catch(e) {}
+    try { veloVideo.currentTime = 0; } catch(e) {}
+    startPlayback();
+  });
+  resetBtn.addEventListener('click', () => {
+    wAbsent = 61; wLate = 34; wPresent = 5;
+    updateSlidersUI();
+  });
+
+  // ============================================================
+  // Zone slider logic — three values always total 100
+  // ============================================================
+  function updateSlidersUI() {
+    rangeAbsentSld.value = wAbsent;
+    rangeLateSld.value = wLate;
+    rangePresentSld.value = wPresent;
+    rangeAbsentVal.textContent = wAbsent + '%';
+    rangeLateVal.textContent = wLate + '%';
+    rangePresentVal.textContent = wPresent + '%';
+  }
+
+  function adjustZones(changed, nv) {
+    nv = Math.max(0, Math.min(100, Math.round(nv)));
+    const rem = 100 - nv;
+    let oA, oB;
+    if (changed === 'present') { oA = wLate; oB = wAbsent; }
+    else if (changed === 'late') { oA = wPresent; oB = wAbsent; }
+    else { oA = wPresent; oB = wLate; }
+
+    const oSum = oA + oB;
+    let nA, nB;
+    if (oSum <= 0) { nA = Math.floor(rem / 2); nB = rem - nA; }
+    else {
+      nA = Math.round(rem * oA / oSum);
+      nB = rem - nA;
+      if (nB < 0) { nB = 0; nA = rem; }
+    }
+
+    if (changed === 'present') { wPresent = nv; wLate = nA; wAbsent = nB; }
+    else if (changed === 'late') { wLate = nv; wPresent = nA; wAbsent = nB; }
+    else { wAbsent = nv; wPresent = nA; wLate = nB; }
+
+    updateSlidersUI();
+  }
+
+  rangeAbsentSld.addEventListener('input', () => adjustZones('absent', parseFloat(rangeAbsentSld.value)));
+  rangeLateSld.addEventListener('input', () => adjustZones('late', parseFloat(rangeLateSld.value)));
+  rangePresentSld.addEventListener('input', () => adjustZones('present', parseFloat(rangePresentSld.value)));
+
+  // ============================================================
+  // Colors
+  // ============================================================
+  colorAbsentInput.addEventListener('input', () => colorAbsent = hexToRgb(colorAbsentInput.value));
+  colorLateInput.addEventListener('input', () => colorLate = hexToRgb(colorLateInput.value));
+  colorPresentInput.addEventListener('input', () => colorPresent = hexToRgb(colorPresentInput.value));
+
+  // ============================================================
+  // File loading
+  // ============================================================
+  mainUpload.addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    mainVideo.src = URL.createObjectURL(f);
+    mainVideo.load();
+  });
+  veloUpload.addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    veloVideo.src = URL.createObjectURL(f);
+    veloVideo.load();
+  });
+
+  mainVideo.addEventListener('loadedmetadata', () => {
+    mainReady = true;
+    const nW = mainVideo.videoWidth || 1280;
+    const nH = mainVideo.videoHeight || 720;
+    const scale = Math.min(1, 1920 / Math.max(nW, nH));
+    outputCanvas.width = Math.round(nW * scale);
+    outputCanvas.height = Math.round(nH * scale);
+    gl.viewport(0, 0, outputCanvas.width, outputCanvas.height);
+  });
+  veloVideo.addEventListener('loadedmetadata', () => { veloReady = true; });
+
+  // ============================================================
+  // Init
+  // ============================================================
+  updateSlidersUI();
+})();
+</script>
+</body>
+</html>

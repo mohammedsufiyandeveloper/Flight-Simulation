@@ -459,6 +459,17 @@ const GARDEN_FRAG = /* glsl */`
   uniform vec2  uAttendanceShares;  // (presentShare, absentShare); lateShare = 1 - both
   uniform vec2  uGardenInner;       // half-extents of the video's own opening, inside its white frame (world units)
 
+  // Two-pass arts (see ART_OPTIONS.velocityVideoId): uMap is a grayscale
+  // render and uVelocity its matching velocity pass — white is fast, black
+  // is slow, pure red is empty background. With a grayscale source there is
+  // no native colour to rotate, so the data's colour is applied outright and
+  // the velocity pass decides where it glows. uHueMode says the data source
+  // is driving colour through uHueShift at all (weather), since 0 turns is a
+  // real colour (red) here rather than "leave the source alone".
+  uniform sampler2D uVelocity;
+  uniform float uHasVelocity;
+  uniform float uHueMode;
+
   varying vec2 vUv;
 
   const vec3 GOLD = vec3(1.00, 0.82, 0.45);
@@ -545,6 +556,21 @@ const GARDEN_FRAG = /* glsl */`
     vec2 safeUv = clamp(mediaUv, 0.0, 1.0);
     vec3 normalCol = texture2D(uMap, safeUv).rgb;
 
+    // velocity: 0 (still) .. 1 (fastest). cloth: 1 on the render itself, 0 on
+    // the red background around it — an exact, per-frame mask, so colour never
+    // spills onto the white display-case frame. (g+b)/2 reads the grey level
+    // and is ~0 on the red background, so the background also counts as still.
+    float velocity = 0.0;
+    float cloth = 0.0;
+    if (uHasVelocity > 0.5) {
+      vec3 vs = texture2D(uVelocity, safeUv).rgb;
+      float redness = vs.r - max(vs.g, vs.b);
+      cloth = 1.0 - smoothstep(0.25, 0.55, redness);
+      velocity = clamp((vs.g + vs.b) * 0.5, 0.0, 1.0);
+    }
+    // Slow areas sit a little deeper, fast ones glow — the "energy" layer.
+    float energy = mix(0.78, 1.28, velocity);
+
     vec3 tintedCol;
     if (uAttendanceMix > 0.5) {
       // Coverage per color has to track its count's share, which is why
@@ -600,17 +626,31 @@ const GARDEN_FRAG = /* glsl */`
       }
       vec3 attendanceCol = colorSum / max(weightSum, 0.0001);
 
-      // Confine the blend to the video's own interior opening — vUv covers
-      // the whole plane, including the white display-case frame baked into
-      // the footage around that opening, and recoloring straight to the
-      // edge of the plane spilled the tint out over that frame (and, by
-      // extension, made the outer cube read as tinted too). A 0.2-world-unit
-      // feather keeps the cutoff from being a hard line.
-      vec2 local = (vUv - 0.5) * uSize;
-      vec2 innerFade = 1.0 - smoothstep(uGardenInner - 0.2, uGardenInner, abs(local));
-      float insideMask = innerFade.x * innerFade.y;
+      if (uHasVelocity > 0.5) {
+        // The velocity pass's own background is the mask here — exact per
+        // frame, rather than the fixed rectangle below.
+        tintedCol = mix(normalCol, attendanceCol * energy, cloth);
+      } else {
+        // Confine the blend to the video's own interior opening — vUv covers
+        // the whole plane, including the white display-case frame baked into
+        // the footage around that opening, and recoloring straight to the
+        // edge of the plane spilled the tint out over that frame (and, by
+        // extension, made the outer cube read as tinted too). A 0.2-world-unit
+        // feather keeps the cutoff from being a hard line.
+        vec2 local = (vUv - 0.5) * uSize;
+        vec2 innerFade = 1.0 - smoothstep(uGardenInner - 0.2, uGardenInner, abs(local));
+        float insideMask = innerFade.x * innerFade.y;
 
-      tintedCol = mix(normalCol, attendanceCol, insideMask);
+        tintedCol = mix(normalCol, attendanceCol, insideMask);
+      }
+    } else if (uHasVelocity > 0.5 && uHueMode > 0.5) {
+      // Colour the grayscale render outright: its brightness is the shading,
+      // uHueShift (the data's absolute hue — nativeHue is 0 for these arts)
+      // is the colour. Fast areas also desaturate slightly toward white, so
+      // they read as highlights rather than just a brighter flat colour.
+      float value = dot(normalCol, vec3(0.299, 0.587, 0.114));
+      vec3 tint = hsv2rgb(vec3(fract(uHueShift), mix(0.9, 0.6, velocity), 1.0));
+      tintedCol = mix(normalCol, value * tint * energy, cloth);
     } else if (abs(uHueShift) > 0.0001) {
       // abs(), not a plain > check: uHueShift can be negative (the 40°C+
       // magenta anchor is -0.1111, the short way around the wheel from red —
@@ -667,7 +707,10 @@ class LivingGarden {
         uHueShift: { value: 0 },
         uAttendanceMix: { value: 0 },
         uAttendanceShares: { value: new THREE.Vector2(0, 0) },
-        uGardenInner: { value: new THREE.Vector2(GARDEN.innerX, GARDEN.innerY) }
+        uGardenInner: { value: new THREE.Vector2(GARDEN.innerX, GARDEN.innerY) },
+        uVelocity: { value: null },
+        uHasVelocity: { value: 0 },
+        uHueMode: { value: 0 }
       }
     });
 
@@ -702,6 +745,22 @@ class LivingGarden {
     u.uMap.value = texture;
     u.uMediaAspect.value = mediaAspect;
     u.uVideoResolution.value.set(mediaResolution[0], mediaResolution[1]);
+  }
+
+  /**
+   * The velocity pass paired with the current media, or null for a
+   * single-video art. Must share the main video's framing — it is sampled at
+   * the same UV.
+   */
+  setVelocity(texture) {
+    const u = this.material.uniforms;
+    u.uVelocity.value = texture;
+    u.uHasVelocity.value = texture ? 1 : 0;
+  }
+
+  /** Whether the data source colours the art through uHueShift (tintMode "hue"). */
+  setHueMode(active) {
+    this.material.uniforms.uHueMode.value = active ? 1 : 0;
   }
 
   /**
@@ -943,7 +1002,9 @@ async function loadGardenVideoTexture(url) {
 
    To add an art option: give it an id in ART_OPTIONS, add its video
    id to VIDEO_PATHS below AND to VIDEO_KEYS in api/_r2.js so the
-   presigner will sign it. To add a data source: give it an id in
+   presigner will sign it. A two-pass art (grayscale render + velocity
+   pass, like art4) also names its velocity clip as velocityVideoId,
+   registered the same way. To add a data source: give it an id in
    DATA_SOURCES, point it at an endpoint (proxied server-side if it
    needs a key — see /api/wind), and write apply(). No engine code
    changes either way.
@@ -970,7 +1031,8 @@ const VIDEO_PATHS = {
   art1: "flight-simulation/4k_render_final_001.mp4",
   art2: "flight-simulation/2kwithoutflowers.mp4",
   art3: "flight-simulation/ART3.mp4",
-  art4: "flight-simulation/weather_warm.mp4",
+  art4: "flight-simulation/render001.mp4",
+  art4v: "flight-simulation/playbalst3.mp4",
   art5: "flight-simulation/art.mp4",
   art6: "flight-simulation/vid.mp4"
 };
@@ -1161,7 +1223,12 @@ const ART_OPTIONS = {
   art1: { name: "ART 1", blurb: "The original flight-garden render", videoId: "art1", exclusiveTo: "flight", nativeHue: 0 },
   art2: { name: "ART 2", blurb: "The bare garden, without its flowers", videoId: "art2", nativeHue: 1 / 3 },
   art3: { name: "ART 3", blurb: "A third garden render", videoId: "art3", nativeHue: 1 / 3 },
-  art4: { name: "ART 4", blurb: "The warm, tintable garden render", videoId: "art4", nativeHue: 0 },
+  // Two-pass art: a grayscale render plus its velocity pass (velocityVideoId).
+  // With no colour of its own to rotate, the data source's colour is applied
+  // outright and the velocity pass decides where it glows — see uVelocity in
+  // GARDEN_FRAG. nativeHue stays 0 so setHue hands the shader the data's
+  // absolute hue.
+  art4: { name: "ART 4", blurb: "Grayscale render, coloured by data and motion", videoId: "art4", velocityVideoId: "art4v", nativeHue: 0 },
   art5: { name: "ART 5", blurb: "A new garden render", videoId: "art5", nativeHue: 1 / 3 },
   art6: { name: "ART 6", blurb: "A new garden render", videoId: "art6", nativeHue: 1 / 3 }
 };
@@ -1313,6 +1380,7 @@ function prefetchOtherArt(activeId) {
   for (const id of artIds()) {
     if (id === activeId) continue;
     prefetchVideo(ART_OPTIONS[id].videoId);
+    if (ART_OPTIONS[id].velocityVideoId) prefetchVideo(ART_OPTIONS[id].velocityVideoId);
   }
 }
 
@@ -1526,6 +1594,41 @@ let disposeGardenVideo = null;
 /** The video id currently on screen, so a no-op swap costs nothing. */
 let currentVideoId = null;
 
+/** The velocity pass currently bound alongside it, or null. */
+let currentVelocityId = null;
+
+/** Torn down with its main video — the velocity pass's own decoder. */
+let disposeVelocityVideo = null;
+
+/**
+ * How far (seconds) the velocity pass may drift from the main video before
+ * it is snapped back. Two separately decoded clips never stay frame-locked on
+ * their own — and these two differ by a frame in length, so they would drift
+ * a frame further apart every loop — but the velocity pass only drives a
+ * soft glow, so a couple of frames of slack is invisible and avoids seeking
+ * (which briefly stalls that texture) on every tick.
+ */
+const VELOCITY_MAX_DRIFT = 0.07;
+
+/**
+ * Makes `follower` track `leader`: same playback rate, and re-seeked
+ * whenever it drifts past VELOCITY_MAX_DRIFT (including across the loop
+ * boundary, where the leader wraps to 0 first). Runs from the leader
+ * texture's per-frame update(), so it costs nothing when the art isn't up.
+ */
+function slaveVelocityVideo(leaderTexture, leader, follower) {
+  const baseUpdate = leaderTexture.update;
+  leaderTexture.update = function () {
+    if (follower.playbackRate !== leader.playbackRate) follower.playbackRate = leader.playbackRate;
+    if (!follower.seeking && follower.readyState >= follower.HAVE_METADATA) {
+      if (Math.abs(follower.currentTime - leader.currentTime) > VELOCITY_MAX_DRIFT) {
+        follower.currentTime = leader.currentTime;
+      }
+    }
+    baseUpdate.call(this);
+  };
+}
+
 /**
  * Points the garden plane at `videoId`.
  *
@@ -1538,15 +1641,31 @@ let currentVideoId = null;
  * instead of showing a black plane. A failure with no fallback left leaves
  * the previous render playing rather than tearing the scene down.
  */
-async function setGardenVideo(videoId, { allowFallback = true } = {}) {
-  if (videoId === currentVideoId) return true;
+async function setGardenVideo(videoId, { velocityId = null, allowFallback = true } = {}) {
+  if (videoId === currentVideoId && velocityId === currentVelocityId) return true;
 
   const url = ART.url(videoId);
+
+  // A ?video= test override replaces the main render only — pairing it with
+  // this art's velocity pass would glow in the wrong places.
+  const hasOverride = new URLSearchParams(location.search).has("video");
+  const velocityUrl = velocityId && !hasOverride ? ART.url(velocityId) : null;
+
+  // Both clips load in parallel. The velocity pass is optional: if it won't
+  // load, the art still shows (uncoloured by motion) instead of falling back.
+  const velocityPromise = velocityUrl
+    ? loadGardenVideoTexture(velocityUrl).catch((err) => {
+      console.warn(`[Flight Garden] velocity pass "${velocityId}" unavailable at ${velocityUrl} — showing the render without it.`, err);
+      return null;
+    })
+    : Promise.resolve(null);
+
   let media;
 
   try {
     media = await loadGardenVideoTexture(url);
   } catch (err) {
+    velocityPromise.then((v) => v?.dispose());
     const fallback = ART.fallbackVideoId;
     if (allowFallback && fallback && fallback !== videoId) {
       console.warn(
@@ -1560,21 +1679,32 @@ async function setGardenVideo(videoId, { allowFallback = true } = {}) {
     return false;
   }
 
+  const velocity = await velocityPromise;
+  if (velocity) {
+    velocity.video.currentTime = media.video.currentTime;
+    slaveVelocityVideo(media.texture, media.video, velocity.video);
+  }
+
   // Swap first, then dispose: releasing the outgoing decoder before the new
   // texture is bound would blank the plane for a frame.
   const previousDispose = disposeGardenVideo;
+  const previousVelocityDispose = disposeVelocityVideo;
 
   if (livingGarden) {
     livingGarden.setMedia(media.texture, media.mediaAspect, media.mediaResolution);
   } else {
     livingGarden = new LivingGarden(media.texture, media.mediaAspect, media.mediaResolution);
   }
+  livingGarden.setVelocity(velocity?.texture ?? null);
 
   gardenVideoEl = media.video;
   disposeGardenVideo = media.dispose;
+  disposeVelocityVideo = velocity?.dispose ?? null;
   currentVideoId = videoId;
+  currentVelocityId = velocity ? velocityId : null;
 
   if (previousDispose) previousDispose();
+  if (previousVelocityDispose) previousVelocityDispose();
 
   resize();
   return true;
@@ -1720,7 +1850,8 @@ async function activateOutput(artId, dataId) {
     clearDetail();
   }
 
-  await setGardenVideo(art.videoId);
+  await setGardenVideo(art.videoId, { velocityId: art.velocityVideoId ?? null });
+  livingGarden?.setHueMode(data.tintMode === "hue");
 
   // Pre-seed shader hue & attendance mix immediately for this output
   if (data.tintMode === "hue") {
