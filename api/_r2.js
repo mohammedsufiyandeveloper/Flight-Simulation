@@ -111,7 +111,7 @@ const VIDEO_KEYS = {
   // Fixed to the Flight data source — nothing else ever requests this id.
   art1: 'flight-simulation/4k_render_final_001.mp4',
 
-  // The general-purpose pool Weather picks from. art2's key keeps
+  // The general-purpose pool Weather/Attendance pick from. art2's key keeps
   // its original upload name (2kwithoutflowers.mp4) rather than being
   // re-uploaded under a new one — same bytes, just a different id pointing
   // at them.

@@ -938,7 +938,7 @@ async function loadGardenVideoTexture(url) {
    own terminal blooms, so DATA_SOURCES.flight.fixedArtId locks the
    gate's art column to it (see renderGateArtColumn), and
    ART_OPTIONS.art1's exclusiveTo marks it out of the general pool
-   Weather chooses from. Every other pairing is free —
+   Weather/Attendance choose from. Every other pairing is free —
    nothing downstream hard-codes a combination there.
 
    To add an art option: give it an id in ART_OPTIONS, add its video
@@ -1066,6 +1066,36 @@ async function fetchReading(endpoint) {
 }
 
 /**
+ * The attendance scene's feed — present/absent/late headcounts from
+ * trava-app. Same shape of proxy as fetchReading/api/wind.js: the trava-app
+ * API key never reaches the browser, /api/attendance reads it server-side
+ * from TRAVA_ATTENDANCE_API_KEY.
+ */
+async function fetchAttendanceReading(endpoint) {
+  const res = await fetch(endpoint);
+  if (!res.ok) throw new Error(`${endpoint} → HTTP ${res.status}`);
+  const data = await res.json();
+  if (
+    typeof data.present !== "number" ||
+    typeof data.absent !== "number" ||
+    typeof data.late !== "number"
+  ) {
+    throw new Error(data.error || `${endpoint} returned incomplete attendance counts`);
+  }
+  return data;
+}
+
+/** Which category the HUD calls out as driving the current tint. */
+function labelForAttendance({ present, absent, late }) {
+  const total = present + absent + late;
+  if (total <= 0) return null;
+  const top = Math.max(present, absent, late);
+  if (top === present) return "Mostly Present";
+  if (top === late) return "Mostly Late";
+  return "Mostly Absent";
+}
+
+/**
  * The wind data source's temperature→hue mapping. `anchors` are [tempC,
  * hueTurns] control points the current reading is linearly interpolated
  * between (see hueForTemp); 0 turns is the source video's own red, so a hot
@@ -1126,7 +1156,7 @@ function bandForValue(value, labels) {
 const ART_OPTIONS = {
   // Flight's own render — see DATA_SOURCES.flight.fixedArtId. exclusiveTo
   // is what pulls it out of the general pool the gate offers under
-  // Weather (see the general-pool filter in renderGateArtColumn).
+  // Weather/Attendance (see the general-pool filter in renderGateArtColumn).
   // nativeHue represents the art's baseline hue on the color wheel (0 = Red, 1/3 = Green 120°).
   art1: { name: "ART 1", blurb: "The original flight-garden render", videoId: "art1", exclusiveTo: "flight", nativeHue: 0 },
   art2: { name: "ART 2", blurb: "The bare garden, without its flowers", videoId: "art2", nativeHue: 1 / 3 },
@@ -1143,7 +1173,8 @@ const ART_OPTIONS = {
  * panels the HUD should show alongside it. `flights` runs the butterfly/
  * airport simulation over the art on top of whatever `apply` does to it.
  * `tintMode` picks the shader's colour behaviour: "hue" rotates the art's
- * hue, "none" leaves colour alone.
+ * hue, "attendance" turns on its three-colour present/absent/late blend,
+ * "none" leaves colour alone.
  */
 const DATA_SOURCES = {
   flight: {
@@ -1200,6 +1231,31 @@ const DATA_SOURCES = {
       return { wind: reading.kph, temp: reading.tempC, band };
     },
     panels: { weather: true }
+  },
+
+  attendance: {
+    name: "Attendance",
+    blurb: "Presence colours the garden",
+    titlecard: {
+      kicker: "Attendance Garden",
+      line: "Live attendance, rendered as a living garden",
+      sub: "Green is present · Red is absent · Orange is late"
+    },
+    endpoint: "/api/attendance",
+    fetch: fetchAttendanceReading,
+    pollMs: 5 * 60 * 1000,
+    tintMode: "attendance",
+    flights: false,
+    apply(reading, ctx) {
+      const total = reading.present + reading.absent + reading.late;
+      if (total > 0) {
+        ctx.setAttendanceShares(reading.present / total, reading.absent / total);
+      }
+      const band = labelForAttendance(reading);
+
+      return { present: reading.present, absent: reading.absent, late: reading.late, band };
+    },
+    panels: { attendance: true }
   }
 };
 
@@ -1567,6 +1623,14 @@ function dataContext() {
       if (shift > 0.5) shift -= 1;
       if (shift <= -0.5) shift += 1;
       livingGarden?.setHueShift(shift, immediate);
+    },
+
+    /**
+     * Sizes the shader's green/red/orange blotches to each category's share
+     * of the total (see LivingGarden.setAttendanceShares).
+     */
+    setAttendanceShares(presentShare, absentShare) {
+      livingGarden?.setAttendanceShares(presentShare, absentShare);
     }
   };
 }
@@ -1658,7 +1722,7 @@ async function activateOutput(artId, dataId) {
 
   await setGardenVideo(art.videoId);
 
-  // Pre-seed shader hue immediately for this output
+  // Pre-seed shader hue & attendance mix immediately for this output
   if (data.tintMode === "hue") {
     const defaultTemp = manualReading?.tempC ?? 27;
     const targetTurns = hueForTemp(defaultTemp, WIND_THERMAL.anchors);
@@ -1670,6 +1734,8 @@ async function activateOutput(artId, dataId) {
   } else {
     livingGarden?.setHueShift(0, true);
   }
+  livingGarden?.setAttendanceShares(0, 0);
+  livingGarden?.setAttendanceMix(data.tintMode === "attendance");
 
   // Awaited so an output switch's veil stays down until the art is not just
   // loaded but correctly coloured/paced — otherwise the reveal exposes a
@@ -3181,7 +3247,13 @@ const ui = {
   statWind: document.getElementById("statWind"),
   manualTemp: document.getElementById("manualTemp"),
   manualWind: document.getElementById("manualWind"),
-  realtimeBtn: document.getElementById("realtimeBtn")
+  realtimeBtn: document.getElementById("realtimeBtn"),
+
+  // attendance readout
+  attendancePanel: document.getElementById("attendancePanel"),
+  statPresent: document.getElementById("statPresent"),
+  statAbsent: document.getElementById("statAbsent"),
+  statLate: document.getElementById("statLate")
 };
 
 /* --- airport selector --- */
@@ -3366,7 +3438,7 @@ ui.unpinBtn.addEventListener("click", () => setPinned(null));
 function applyOutputPanels(art, data) {
   const panels = {
     tower: true, stats: false, legend: false, detail: false,
-    weather: false,
+    weather: false, attendance: false,
     ...data.panels
   };
   const blocks = {
@@ -3374,7 +3446,8 @@ function applyOutputPanels(art, data) {
     stats: ui.statsPanel,
     legend: ui.legendPanel,
     detail: ui.detailPanel,
-    weather: ui.weatherPanel
+    weather: ui.weatherPanel,
+    attendance: ui.attendancePanel
   };
 
   for (const [key, el] of Object.entries(blocks)) {
@@ -3423,6 +3496,16 @@ function renderSceneReadout() {
     if (ui.manualTemp && typeof r.temp === "number") ui.manualTemp.value = r.temp;
     if (ui.manualWind && typeof r.wind === "number") ui.manualWind.value = r.wind;
   }
+
+  if (ui.statPresent) {
+    ui.statPresent.textContent = typeof r.present === "number" ? r.present : "—";
+  }
+  if (ui.statAbsent) {
+    ui.statAbsent.textContent = typeof r.absent === "number" ? r.absent : "—";
+  }
+  if (ui.statLate) {
+    ui.statLate.textContent = typeof r.late === "number" ? r.late : "—";
+  }
 }
 
 /**
@@ -3433,7 +3516,7 @@ function renderSceneReadout() {
 let gateArtId = DEFAULT_ART;
 let gateDataId = DEFAULT_DATA;
 
-/** Every art id not locked to one specific data source — the pool Weather chooses from. */
+/** Every art id not locked to one specific data source — the pool Weather/Attendance choose from. */
 const generalArtIds = () => artIds().filter((id) => !ART_OPTIONS[id].exclusiveTo);
 
 /**
