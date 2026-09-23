@@ -470,6 +470,26 @@ const GARDEN_FRAG = /* glsl */`
   uniform float uHasVelocity;
   uniform float uHueMode;
 
+  // Attendance on a two-pass art — the VelocityMap Studio composite. Velocity
+  // is split into three zones, slowest = absent, middle = late, fastest =
+  // present; uZoneB1/uZoneB2 are velocity quantiles placed on the CPU from
+  // the velocity pass's histogram (see VelocitySampler) so each zone's area
+  // follows its share. The rest is the studio's look, set from
+  // VELOCITY_STUDIO by LivingGarden.setVelocityStudio().
+  uniform float uZoneB1;       // absent → late boundary
+  uniform float uZoneB2;       // late → present boundary
+  uniform float uZoneSoft;     // feather half-width across each boundary
+  uniform vec3  uZoneEmpty;    // (noAbsent, noLate, noPresent) — 1 where that share is zero
+  uniform vec4  uZoneForce;    // rgb + blend: a dominant (≥80%) share floods the cloth its colour
+  uniform vec3  uZoneAbsent;
+  uniform vec3  uZoneLate;
+  uniform vec3  uZonePresent;
+  uniform vec3  uStudioMask;   // (redLo, 1/redRange, gbLimit) — the red-background cutout
+  uniform vec3  uStudioMix;    // (strength, rawMixBase, rawMixExtreme)
+  uniform vec3  uStudioTone;   // (saturation, vibrance, highlights)
+  uniform vec3  uStudioTone2;  // (shadows, brightness, contrast)
+  uniform vec4  uStudioMood;   // rgb multiplier + mix
+
   varying vec2 vUv;
 
   const vec3 GOLD = vec3(1.00, 0.82, 0.45);
@@ -548,6 +568,66 @@ const GARDEN_FRAG = /* glsl */`
     return c * 1.35 - (n + s + e + w) * 0.0875;
   }
 
+  vec3 overlayBlend(vec3 b, vec3 t){
+    return mix(2.0 * b * t, 1.0 - 2.0 * (1.0 - b) * (1.0 - t), step(0.5, b));
+  }
+
+  // Positive amount lifts toward white, negative scales toward black.
+  vec3 toneLift(vec3 c, float amount){
+    return amount >= 0.0 ? c + (1.0 - c) * amount : c * (1.0 + amount);
+  }
+
+  // m: the grayscale render, v: its velocity pass. Both are sampled as raw
+  // sRGB (THREE doesn't linearise a VideoTexture for a ShaderMaterial), the
+  // same space the studio worked in, so its thresholds carry over as-is.
+  vec3 velocityAttendance(vec3 m, vec3 v){
+    // Red background → keep the render untouched.
+    float maskFactor = 1.0;
+    if (v.g < uStudioMask.z && v.b < uStudioMask.z) {
+      float redness = v.r - max(v.g, v.b);
+      maskFactor = 1.0 - clamp((redness - uStudioMask.x) * uStudioMask.y, 0.0, 1.0);
+    }
+    if (maskFactor <= 0.001) return m;
+
+    float lum = (v.g + v.b) * 0.5;
+    float t1 = smoothstep(uZoneB1 - uZoneSoft, uZoneB1 + uZoneSoft, lum);
+    float t2 = smoothstep(uZoneB2 - uZoneSoft, uZoneB2 + uZoneSoft, lum);
+    if (uZoneEmpty.x > 0.5) t1 = 1.0;
+    if (uZoneEmpty.z > 0.5) t2 = 0.0;
+    if (uZoneEmpty.y > 0.5) t1 = 0.0;
+
+    vec3 c = mix(mix(uZoneAbsent, uZoneLate, t1), uZonePresent, t2);
+    c = mix(c, uZoneForce.rgb, uZoneForce.a);
+
+    // Overlay keeps the render's own shading under the zone colour; raw mix
+    // pulls the flat colour back in, more so where the render is near
+    // black or white and the overlay has little to work with.
+    vec3 result = overlayBlend(m, c);
+    float extreme = clamp(abs((m.r + m.g + m.b) / 3.0 - 0.5) * 2.0, 0.0, 1.0);
+    result = mix(result, c, uStudioMix.y + uStudioMix.z * extreme);
+
+    float lumC = dot(result, vec3(0.299, 0.587, 0.114));
+    result = mix(vec3(lumC), result, uStudioTone.x);               // saturation
+
+    float maxC = max(max(result.r, result.g), result.b);
+    float minC = min(min(result.r, result.g), result.b);
+    float currSat = maxC < 0.001 ? 0.0 : (maxC - minC) / maxC;
+    result = mix(vec3(lumC), result, 1.0 + (uStudioTone.y - 1.0) * (1.0 - currSat)); // vibrance
+
+    float wH = lumC > 0.5 ? (lumC - 0.5) * 2.0 : 0.0;
+    result = toneLift(result, uStudioTone.z * wH);                  // highlights
+    float wS = lumC < 0.5 ? (0.5 - lumC) * 2.0 : 0.0;
+    result = toneLift(result, uStudioTone2.x * wS * 0.8);           // shadows
+
+    result *= uStudioTone2.y;                                       // brightness
+    result = (result - 0.5) * uStudioTone2.z + 0.5;                 // contrast
+    result = mix(result, result * uStudioMood.rgb, uStudioMood.a);  // mood
+    result = clamp(result, 0.0, 1.0);
+
+    result = mix(m, result, uStudioMix.x);                          // strength
+    return mix(m, result, maskFactor);
+  }
+
   void main(){
     vec2 mediaUv = fitContainUv(vUv);
     float mediaValid = step(0.0, mediaUv.x) * step(0.0, mediaUv.y)
@@ -572,7 +652,9 @@ const GARDEN_FRAG = /* glsl */`
     float energy = mix(0.78, 1.28, velocity);
 
     vec3 tintedCol;
-    if (uAttendanceMix > 0.5) {
+    if (uAttendanceMix > 0.5 && uHasVelocity > 0.5) {
+      tintedCol = velocityAttendance(normalCol, texture2D(uVelocity, safeUv).rgb);
+    } else if (uAttendanceMix > 0.5) {
       // Coverage per color has to track its count's share, which is why
       // category comes from a single per-cell hash used directly against
       // the thresholds — a blended/interpolated noise value clusters near
@@ -626,23 +708,17 @@ const GARDEN_FRAG = /* glsl */`
       }
       vec3 attendanceCol = colorSum / max(weightSum, 0.0001);
 
-      if (uHasVelocity > 0.5) {
-        // The velocity pass's own background is the mask here — exact per
-        // frame, rather than the fixed rectangle below.
-        tintedCol = mix(normalCol, attendanceCol * energy, cloth);
-      } else {
-        // Confine the blend to the video's own interior opening — vUv covers
-        // the whole plane, including the white display-case frame baked into
-        // the footage around that opening, and recoloring straight to the
-        // edge of the plane spilled the tint out over that frame (and, by
-        // extension, made the outer cube read as tinted too). A 0.2-world-unit
-        // feather keeps the cutoff from being a hard line.
-        vec2 local = (vUv - 0.5) * uSize;
-        vec2 innerFade = 1.0 - smoothstep(uGardenInner - 0.2, uGardenInner, abs(local));
-        float insideMask = innerFade.x * innerFade.y;
+      // Confine the blend to the video's own interior opening — vUv covers
+      // the whole plane, including the white display-case frame baked into
+      // the footage around that opening, and recoloring straight to the
+      // edge of the plane spilled the tint out over that frame (and, by
+      // extension, made the outer cube read as tinted too). A 0.2-world-unit
+      // feather keeps the cutoff from being a hard line.
+      vec2 local = (vUv - 0.5) * uSize;
+      vec2 innerFade = 1.0 - smoothstep(uGardenInner - 0.2, uGardenInner, abs(local));
+      float insideMask = innerFade.x * innerFade.y;
 
-        tintedCol = mix(normalCol, attendanceCol, insideMask);
-      }
+      tintedCol = mix(normalCol, attendanceCol, insideMask);
     } else if (uHasVelocity > 0.5 && uHueMode > 0.5) {
       // Colour the grayscale render outright: its brightness is the shading,
       // uHueShift (the data's absolute hue — nativeHue is 0 for these arts)
@@ -674,6 +750,159 @@ const GARDEN_FRAG = /* glsl */`
  * not a hard duration.
  */
 const HUE_EASE_SECONDS = 1.4;
+
+/**
+ * The look of a two-pass art under attendance data — every control the
+ * VelocityMap Studio exposed, at the studio's defaults. The zone shares
+ * themselves come from the live attendance reading, not from here.
+ */
+const VELOCITY_STUDIO = {
+  colors: { absent: "#ae1e3b", late: "#0e68a0", present: "#078f05" },
+  strength: 1,          // 0 leaves the render untouched .. 1 full effect
+  rawMix: 0,            // 0..1 — flat zone colour pulled in over the overlay blend
+  edgeSoftness: 1,      // 0..1 — feather across the zone boundaries
+  maskSoftness: 1,      // 0..1 — how softly the red background is cut out
+  correction: "studio", // a VELOCITY_CORRECTIONS key, or { sat, vib, hl, sh, br, ct }
+  mood: "none"          // a VELOCITY_MOODS key
+};
+
+/** The studio's colour-correction presets; "studio" is its default. */
+const VELOCITY_CORRECTIONS = {
+  studio: { sat: 1.02, vib: 0.92, hl: 1.00, sh: -0.80, br: 1.00, ct: 1.15 },
+  neutral: { sat: 1.00, vib: 1.00, hl: 0.00, sh: 0.00, br: 1.00, ct: 1.00 },
+  punchy: { sat: 1.35, vib: 1.25, hl: 0.10, sh: 0.15, br: 1.05, ct: 1.15 },
+  cinematic: { sat: 0.90, vib: 1.15, hl: -0.20, sh: -0.10, br: 0.95, ct: 1.20 },
+  soft: { sat: 0.70, vib: 1.05, hl: 0.15, sh: 0.25, br: 1.10, ct: 0.85 },
+  dramatic: { sat: 1.20, vib: 1.30, hl: -0.30, sh: -0.25, br: 0.92, ct: 1.30 },
+  filmic: { sat: 0.95, vib: 1.10, hl: -0.10, sh: 0.10, br: 1.02, ct: 1.10 }
+};
+
+/** The studio's mood tints: an RGB multiplier and how much of it to apply. */
+const VELOCITY_MOODS = {
+  none: { r: 1, g: 1, b: 1, mix: 0 },
+  warm: { r: 1.18, g: 1.02, b: 0.82, mix: 0.55 },
+  cool: { r: 0.82, g: 0.98, b: 1.20, mix: 0.55 },
+  moody: { r: 0.88, g: 1.02, b: 1.10, mix: 0.60 },
+  dreamy: { r: 1.10, g: 1.02, b: 1.14, mix: 0.50 },
+  noir: { r: 1, g: 1, b: 1, mix: 0.40 },
+  sunset: { r: 1.22, g: 1.05, b: 0.85, mix: 0.65 },
+  forest: { r: 0.88, g: 1.15, b: 0.90, mix: 0.55 },
+  cyber: { r: 1.10, g: 0.85, b: 1.28, mix: 0.65 },
+  vintage: { r: 1.10, g: 1.02, b: 0.90, mix: 0.45 }
+};
+
+/** "#rrggbb" → [r, g, b] in 0..1, left in sRGB (THREE.Color would linearise it). */
+function hexToRgb01(hex) {
+  const n = parseInt(hex.replace("#", ""), 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+/**
+ * Decoded velocity frames between histogram samples. The studio sampled
+ * every 4th render tick (~15 Hz at 60 fps); every 2nd frame of a 30 fps
+ * clip is the same rate, without re-reading frames it has already seen.
+ */
+const VELOCITY_SAMPLE_EVERY = 2;
+
+const VELOCITY_HIST_W = 128;
+const VELOCITY_HIST_H = 72;
+const VELOCITY_HIST_BINS = 128;
+const velocityHistCanvas = document.createElement("canvas");
+velocityHistCanvas.width = VELOCITY_HIST_W;
+velocityHistCanvas.height = VELOCITY_HIST_H;
+const velocityHistCtx = velocityHistCanvas.getContext("2d", { willReadFrequently: true });
+
+/**
+ * Keeps a histogram of the velocity pass's brightness, which is what the
+ * attendance zones are placed from.
+ *
+ * Drawing the <video> straight into a CPU-side canvas makes the browser
+ * pull the whole 4K frame back off the GPU and shrink it on the main thread
+ * — a stall of several milliseconds, 15 times a second. createImageBitmap
+ * does the shrink first, asynchronously, so only 128×72 pixels ever come
+ * back. Samples are driven by requestVideoFrameCallback where it exists,
+ * so they track real decoded frames rather than render ticks.
+ */
+class VelocitySampler {
+  constructor(video) {
+    this.video = video;
+    this.hist = new Float32Array(VELOCITY_HIST_BINS);
+    this.total = VELOCITY_HIST_W * VELOCITY_HIST_H;
+    this.version = 0;      // bumps on every fresh histogram
+    this.active = false;   // only sample while the attendance look is up
+    this.pending = false;
+    this.stopped = false;
+    this.count = 0;
+
+    this.hasFrameCallback = typeof video.requestVideoFrameCallback === "function";
+    if (this.hasFrameCallback) {
+      const onFrame = () => {
+        if (this.stopped) return;
+        this.maybeSample();
+        video.requestVideoFrameCallback(onFrame);
+      };
+      video.requestVideoFrameCallback(onFrame);
+    }
+  }
+
+  /** Per render tick — only drives sampling where rVFC is missing (Firefox). */
+  tick() {
+    if (!this.hasFrameCallback) this.maybeSample(2 * VELOCITY_SAMPLE_EVERY);
+  }
+
+  maybeSample(every = VELOCITY_SAMPLE_EVERY) {
+    if (!this.active || this.pending) return;
+    if (this.count++ % every === 0) this.sample();
+  }
+
+  async sample() {
+    const video = this.video;
+    if (video.readyState < video.HAVE_CURRENT_DATA) return;
+    this.pending = true;
+    try {
+      const bitmap = await createImageBitmap(video, {
+        resizeWidth: VELOCITY_HIST_W,
+        resizeHeight: VELOCITY_HIST_H,
+        resizeQuality: "low"
+      });
+      if (this.stopped) {
+        bitmap.close();
+        return;
+      }
+      velocityHistCtx.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const px = velocityHistCtx.getImageData(0, 0, VELOCITY_HIST_W, VELOCITY_HIST_H).data;
+
+      const hist = this.hist;
+      hist.fill(0);
+      for (let i = 0; i < px.length; i += 4) {
+        const lum = (px[i + 1] + px[i + 2]) / 510;
+        hist[Math.min(VELOCITY_HIST_BINS - 1, (lum * VELOCITY_HIST_BINS) | 0)] += 1;
+      }
+      this.version++;
+    } catch {
+      // Frame not readable yet (mid-seek, or torn down) — the next one will be.
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  /** The velocity below which share `p` of the frame's pixels fall. */
+  quantile(p) {
+    const target = clamp(p, 0, 1) * this.total;
+    let acc = 0;
+    for (let i = 0; i < VELOCITY_HIST_BINS; i++) {
+      const next = acc + this.hist[i];
+      if (next >= target) return (i + (target - acc) / Math.max(1, this.hist[i])) / VELOCITY_HIST_BINS;
+      acc = next;
+    }
+    return 1;
+  }
+
+  stop() {
+    this.stopped = true;
+  }
+}
 
 /**
  * Owns the garden plane and the uniforms that make it feel alive. Gate state is
@@ -710,9 +939,30 @@ class LivingGarden {
         uGardenInner: { value: new THREE.Vector2(GARDEN.innerX, GARDEN.innerY) },
         uVelocity: { value: null },
         uHasVelocity: { value: 0 },
-        uHueMode: { value: 0 }
+        uHueMode: { value: 0 },
+        uZoneB1: { value: 0.33 },
+        uZoneB2: { value: 0.66 },
+        uZoneSoft: { value: 0.01 },
+        uZoneEmpty: { value: new THREE.Vector3(0, 0, 0) },
+        uZoneForce: { value: new THREE.Vector4(0, 0, 0, 0) },
+        uZoneAbsent: { value: new THREE.Vector3() },
+        uZoneLate: { value: new THREE.Vector3() },
+        uZonePresent: { value: new THREE.Vector3() },
+        uStudioMask: { value: new THREE.Vector3() },
+        uStudioMix: { value: new THREE.Vector3() },
+        uStudioTone: { value: new THREE.Vector3() },
+        uStudioTone2: { value: new THREE.Vector3() },
+        uStudioMood: { value: new THREE.Vector4() }
       }
     });
+
+    // Samples the velocity pass's histogram to place uZoneB1/B2; null for a
+    // single-video art. zoneSmoothed is the eased boundaries, zoneVersion
+    // the last histogram they were eased toward.
+    this.velocitySampler = null;
+    this.zoneSmoothed = null;
+    this.zoneVersion = 0;
+    this.setVelocityStudio(VELOCITY_STUDIO);
 
     // The uniform above is the *displayed* hue; this is where setHueShift
     // points it — update() eases the uniform toward this every frame rather
@@ -752,10 +1002,106 @@ class LivingGarden {
    * single-video art. Must share the main video's framing — it is sampled at
    * the same UV.
    */
-  setVelocity(texture) {
+  setVelocity(texture, video = null) {
     const u = this.material.uniforms;
     u.uVelocity.value = texture;
     u.uHasVelocity.value = texture ? 1 : 0;
+    this.velocitySampler?.stop();
+    this.velocitySampler = texture && video ? new VelocitySampler(video) : null;
+    this.zoneSmoothed = null;
+    this.zoneVersion = 0;
+  }
+
+  /**
+   * Applies a VELOCITY_STUDIO-shaped settings object — the fixed part of the
+   * two-pass attendance look. Safe to call at any time; the zone boundaries
+   * and force colour that depend on live data follow on the next update().
+   */
+  setVelocityStudio(settings) {
+    const u = this.material.uniforms;
+    this.studio = settings;
+    this.studioRgb = {
+      absent: hexToRgb01(settings.colors.absent),
+      late: hexToRgb01(settings.colors.late),
+      present: hexToRgb01(settings.colors.present)
+    };
+    u.uZoneAbsent.value.set(...this.studioRgb.absent);
+    u.uZoneLate.value.set(...this.studioRgb.late);
+    u.uZonePresent.value.set(...this.studioRgb.present);
+
+    // The studio's red-background mask, in its 0..255 terms: redness above
+    // redLo starts fading the effect out, fully gone redRange later — only
+    // where green and blue are both under gbLimit. Softer masks reach
+    // further into pinks.
+    const soft = settings.maskSoftness;
+    const redHi = 200 - soft * 150;
+    const redLo = 20 + soft * 60;
+    const gbLimit = 100 + soft * 60;
+    u.uStudioMask.value.set(redLo / 255, 255 / Math.max(1, redHi - redLo), gbLimit / 255);
+
+    u.uStudioMix.value.set(settings.strength, settings.rawMix * 0.15, settings.rawMix * 0.55);
+
+    const c = typeof settings.correction === "string"
+      ? VELOCITY_CORRECTIONS[settings.correction] ?? VELOCITY_CORRECTIONS.studio
+      : settings.correction;
+    u.uStudioTone.value.set(c.sat, c.vib, c.hl);
+    u.uStudioTone2.value.set(c.sh, c.br, c.ct);
+
+    const mood = VELOCITY_MOODS[settings.mood] ?? VELOCITY_MOODS.none;
+    u.uStudioMood.value.set(mood.r, mood.g, mood.b, mood.mix);
+  }
+
+  /**
+   * Places the attendance zones for a two-pass art, as the VelocityMap
+   * Studio does: each fresh velocity histogram moves the boundaries 15% of
+   * the way toward its quantiles, so they don't flicker frame to frame.
+   */
+  updateVelocityZones() {
+    const u = this.material.uniforms;
+    const sampler = this.velocitySampler;
+    if (!sampler) return;
+    sampler.active = u.uAttendanceMix.value > 0.5;
+    if (!sampler.active) return;
+    sampler.tick();
+
+    const shares = u.uAttendanceShares.value;
+    const present = shares.x;
+    const absent = shares.y;
+    const late = Math.max(0, 1 - present - absent);
+    const noA = absent <= 0.001, noL = late <= 0.001, noP = present <= 0.001;
+
+    if (sampler.version !== this.zoneVersion) {
+      this.zoneVersion = sampler.version;
+      const b1 = sampler.quantile(absent);
+      const b2 = sampler.quantile(absent + late);
+      if (!this.zoneSmoothed) this.zoneSmoothed = { b1, b2 };
+      this.zoneSmoothed.b1 = this.zoneSmoothed.b1 * 0.85 + b1 * 0.15;
+      this.zoneSmoothed.b2 = this.zoneSmoothed.b2 * 0.85 + b2 * 0.15;
+    }
+    if (!this.zoneSmoothed) return;
+
+    let b1 = this.zoneSmoothed.b1;
+    let b2 = Math.max(b1 + 0.002, this.zoneSmoothed.b2);
+    if (noA) b1 = 0;
+    if (noP) b2 = 1;
+    if (noL) b2 = b1;
+
+    const minZone = Math.max(0.001, Math.min(b1, b2 - b1, 1 - b2));
+    u.uZoneB1.value = b1;
+    u.uZoneB2.value = b2;
+    const edgeSoft = 0.004 + this.studio.edgeSoftness * 0.08;
+    u.uZoneSoft.value = Math.max(0.0015, Math.min(edgeSoft, minZone * 0.25));
+    u.uZoneEmpty.value.set(noA ? 1 : 0, noL ? 1 : 0, noP ? 1 : 0);
+
+    // A share at 80%+ starts flooding the whole cloth its colour (fully at
+    // 100%); present outranks late. Absent only floods at a full 100%.
+    const soft = (p) => clamp((p - 0.8) / 0.2, 0, 1);
+    const force = u.uZoneForce.value;
+    const rgb = this.studioRgb;
+    if (soft(present) > 0) force.set(...rgb.present, soft(present));
+    else if (soft(late) > 0) force.set(...rgb.late, soft(late));
+    else if (absent >= 0.995) force.set(...rgb.absent, 1);
+    else force.set(0, 0, 0, 0);
   }
 
   /** Whether the data source colours the art through uHueShift (tintMode "hue"). */
@@ -827,9 +1173,12 @@ class LivingGarden {
       shares.x += (this.attendanceSharesTarget.x - shares.x) * ease;
       shares.y += (this.attendanceSharesTarget.y - shares.y) * ease;
     }
+
+    this.updateVelocityZones();
   }
 
   dispose() {
+    this.velocitySampler?.stop();
     scene.remove(this.mesh);
     this.mesh.geometry.dispose();
     this.material.dispose();
@@ -1601,30 +1950,54 @@ let currentVelocityId = null;
 let disposeVelocityVideo = null;
 
 /**
- * How far (seconds) the velocity pass may drift from the main video before
- * it is snapped back. Two separately decoded clips never stay frame-locked on
- * their own — and these two differ by a frame in length, so they would drift
- * a frame further apart every loop — but the velocity pass only drives a
- * soft glow, so a couple of frames of slack is invisible and avoids seeking
- * (which briefly stalls that texture) on every tick.
+ * Keeping the velocity pass on the main video's frame. Two separately
+ * decoded clips never stay frame-locked on their own — and these two differ
+ * by a frame in length, so they would drift a frame further apart every
+ * loop. The velocity pass decides which zone colour each pixel gets, so
+ * drift shows as colour sliding off the motion; but seeking stalls that
+ * decoder, so small drift is corrected by running the follower 2% fast or
+ * slow until it catches up (the studio's approach), and only a gap past
+ * VELOCITY_SEEK_DRIFT is seeked.
  */
-const VELOCITY_MAX_DRIFT = 0.07;
+const VELOCITY_SEEK_DRIFT = 0.1;
+const VELOCITY_NUDGE_DRIFT = 0.03;
+const VELOCITY_SETTLED_DRIFT = 0.01;
+const VELOCITY_NUDGE = 0.02;
 
 /**
- * Makes `follower` track `leader`: same playback rate, and re-seeked
- * whenever it drifts past VELOCITY_MAX_DRIFT (including across the loop
- * boundary, where the leader wraps to 0 first). Runs from the leader
- * texture's per-frame update(), so it costs nothing when the art isn't up.
+ * Makes `follower` track `leader` as above. Runs from the leader texture's
+ * per-frame update(), so it costs nothing when the art isn't up.
  */
 function slaveVelocityVideo(leaderTexture, leader, follower) {
   const baseUpdate = leaderTexture.update;
+  let nudge = 0; // -1 slowing, 0 matched, +1 speeding up
+
   leaderTexture.update = function () {
-    if (follower.playbackRate !== leader.playbackRate) follower.playbackRate = leader.playbackRate;
     if (!follower.seeking && follower.readyState >= follower.HAVE_METADATA) {
-      if (Math.abs(follower.currentTime - leader.currentTime) > VELOCITY_MAX_DRIFT) {
+      // Signed and wrapped by the loop length, so the leader wrapping to 0
+      // a frame before the follower reads as a frame of drift, not a whole
+      // clip's worth.
+      let drift = follower.currentTime - leader.currentTime;
+      const dur = leader.duration;
+      if (dur > 0 && isFinite(dur)) {
+        if (drift > dur / 2) drift -= dur;
+        else if (drift < -dur / 2) drift += dur;
+      }
+
+      if (Math.abs(drift) > VELOCITY_SEEK_DRIFT) {
         follower.currentTime = leader.currentTime;
+        nudge = 0;
+      } else if (Math.abs(drift) > VELOCITY_NUDGE_DRIFT) {
+        nudge = drift > 0 ? -1 : 1;
+      } else if (Math.abs(drift) < VELOCITY_SETTLED_DRIFT) {
+        nudge = 0;
       }
     }
+
+    // The leader's rate is data-driven (see the weather scene), so the
+    // nudge rides on top of it rather than replacing it.
+    const rate = leader.playbackRate * (1 + nudge * VELOCITY_NUDGE);
+    if (follower.playbackRate !== rate) follower.playbackRate = rate;
     baseUpdate.call(this);
   };
 }
@@ -1695,7 +2068,7 @@ async function setGardenVideo(videoId, { velocityId = null, allowFallback = true
   } else {
     livingGarden = new LivingGarden(media.texture, media.mediaAspect, media.mediaResolution);
   }
-  livingGarden.setVelocity(velocity?.texture ?? null);
+  livingGarden.setVelocity(velocity?.texture ?? null, velocity?.video ?? null);
 
   gardenVideoEl = media.video;
   disposeGardenVideo = media.dispose;
