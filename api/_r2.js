@@ -110,6 +110,13 @@ function presignR2Get(env, key, expiresInSeconds = 6 * 60 * 60) {
 const VIDEO_KEYS = {
   // Fixed to the Flight data source — nothing else ever requests this id.
   art1: 'flight-simulation/4k_render_final_001.mp4',
+
+  // ART 1 and ART 2 for Weather/Attendance: each a grayscale render plus
+  // the matching velocity pass the shader colours it by.
+  art1g: 'flight-simulation/art1g.mp4',
+  art1v: 'flight-simulation/art1v.mp4',
+  art2g: 'flight-simulation/art2g.mp4',
+  art2v: 'flight-simulation/art2v.mp4',
 };
 
 const DEFAULT_VIDEO_ID = 'art1';
