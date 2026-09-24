@@ -575,7 +575,8 @@ const GARDEN_FRAG = /* glsl */`
 
 
   // m: the grayscale render, v: its velocity pass. Both are sampled as raw
-  // sRGB (THREE doesn't linearise a VideoTexture for a ShaderMaterial).
+  // encoded sRGB because loadGardenVideoTexture marks them NoColorSpace; this
+  // deliberately matches the standalone VelocityMap studio's WebGL path.
 
   // 1 on the cloth, 0 on the velocity pass's red background — colour never
   // spills off the cloth onto the display case.
@@ -1241,7 +1242,20 @@ async function loadGardenVideoTexture(url) {
   });
 
   const texture = new THREE.VideoTexture(video);
-  texture.colorSpace = THREE.SRGBColorSpace;
+
+  // GARDEN_FRAG intentionally does the same encoded-sRGB arithmetic as the
+  // standalone VelocityMap studio: its histogram thresholds, red-background
+  // mask, overlay blend and colour-correction values are all defined against
+  // the video's original 0..1 channel values. Marking these textures as sRGB
+  // makes WebGL decode them to linear light before this custom shader samples
+  // them. The CPU histogram still sees encoded values, so its boundaries no
+  // longer match the velocity pixels and the colour zones collapse or bleed.
+  //
+  // ShaderMaterial does not add an output conversion automatically, either;
+  // keeping the texture untagged therefore gives this shader the same input
+  // and output colour path as velocitymapping.html. This applies to the main
+  // render and its velocity pass so overlay blending also stays in one space.
+  texture.colorSpace = THREE.NoColorSpace;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping;
