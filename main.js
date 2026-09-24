@@ -785,8 +785,11 @@ const HUE_EASE_SECONDS = 1.4;
 
 /**
  * The look of a two-pass art under attendance data — the VelocityMap
- * Studio's controls (velocitymapping.html) in the shown setup. The zone
- * shares themselves come from the live attendance reading, not from here.
+ * Studio controls for the two local project renders. Both project clips are
+ * the standalone's Art 1 / Art 2 pair, whose authored correction profile is
+ * Highlights 1.00 and Shadows -0.80. Using Art 3's softer 0.40 / 0.20 profile
+ * flattens these renders and makes their mapped colours look washed out.
+ * Zone shares themselves come from the attendance reading, not from here.
  */
 const VELOCITY_ATTENDANCE = {
   // Exact VelocityMap Studio palette shown in velocitymapping.html.
@@ -795,8 +798,8 @@ const VELOCITY_ATTENDANCE = {
   rawMix: 0,        // "Raw mix": 0..1 — flat zone colour pulled in over the overlay blend
   edgeSoftness: 1,  // "Edge softness": 0..1 — feather across the zone boundaries
   maskSoftness: 1,  // "Mask softness": 0..1 — how softly the red background is cut out
-  // The studio colour correction shown in the reference setup.
-  correction: { sat: 1.02, vib: 0.92, hl: 0.40, sh: 0.20, br: 1.00, ct: 1.15 },
+  // Exact standalone correction profile authored for Data Art 1 and 2.
+  correction: { sat: 1.02, vib: 0.92, hl: 1.00, sh: -0.80, br: 1.00, ct: 1.15 },
   mood: { r: 1, g: 1, b: 1, mix: 0 }  // "None"
 };
 
