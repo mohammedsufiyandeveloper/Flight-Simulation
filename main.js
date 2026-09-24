@@ -469,7 +469,6 @@ const GARDEN_FRAG = /* glsl */`
   uniform sampler2D uVelocity;
   uniform float uHasVelocity;
   uniform float uHueMode;
-  uniform float uVelocityBlur;  // smoothing radius for the velocity pass, in its own pixels
 
   // Attendance on a two-pass art — the VelocityMap Studio composite
   // (velocitymapping.html), ported as-is. Velocity is split into three
@@ -574,23 +573,6 @@ const GARDEN_FRAG = /* glsl */`
     return mix(2.0 * b * t, 1.0 - 2.0 * (1.0 - b) * (1.0 - t), step(0.5, b));
   }
 
-  // The velocity pass, smoothed over uVelocityBlur pixels (centre plus two
-  // rings of eight taps). A sharp, high-contrast pass puts its grey only on
-  // the thin gradients between black and white, so the middle zone reads
-  // as outlines and every zone breaks into fragments; smoothing it gives
-  // the broad, blobby tones the studio's soft passes have, so each zone
-  // lands as a solid area with a soft edge.
-  vec3 sampleVelocity(vec2 uv){
-    vec2 r = uVelocityBlur / uVideoResolution;
-    vec3 v = texture2D(uVelocity, uv).rgb * 0.2;
-    for (int i = 0; i < 8; i++) {
-      float a = float(i) * 0.785398;
-      vec2 d = vec2(cos(a), sin(a));
-      v += texture2D(uVelocity, uv + d * r * 0.5).rgb * 0.06;
-      v += texture2D(uVelocity, uv + d * r).rgb * 0.04;
-    }
-    return v;
-  }
 
   // m: the grayscale render, v: its velocity pass. Both are sampled as raw
   // sRGB (THREE doesn't linearise a VideoTexture for a ShaderMaterial).
@@ -677,15 +659,22 @@ const GARDEN_FRAG = /* glsl */`
 
     vec2 safeUv = clamp(mediaUv, 0.0, 1.0);
     vec3 normalCol = texture2D(uMap, safeUv).rgb;
+    // Two-pass arts are 1080p renders shown larger than native on the
+    // plane, so their fine folds read soft; sampleSharp (at full strength,
+    // scaled by uSharpenAmount's ~0.3 desktop default) restores them.
+    if (uHasVelocity > 0.5) {
+      vec3 sharp = sampleSharp(uMap, safeUv, 1.0 / uVideoResolution);
+      normalCol = clamp(mix(normalCol, sharp, uSharpenAmount / 0.28), 0.0, 1.0);
+    }
 
     vec3 tintedCol;
     if (uHasVelocity > 0.5 && uAttendanceMix > 0.5) {
-      tintedCol = velocityAttendance(normalCol, sampleVelocity(safeUv));
+      tintedCol = velocityAttendance(normalCol, texture2D(uVelocity, safeUv).rgb);
     } else if (uHasVelocity > 0.5 && uHueMode > 0.5) {
       // uHueShift is the temperature's absolute hue here — nativeHue is 0
       // for these arts — and eases between readings.
       vec3 tempCol = hsv2rgb(vec3(fract(uHueShift), 0.95, 1.0));
-      tintedCol = velocityTemperature(normalCol, sampleVelocity(safeUv), tempCol);
+      tintedCol = velocityTemperature(normalCol, texture2D(uVelocity, safeUv).rgb, tempCol);
     } else if (uAttendanceMix > 0.5) {
       // Coverage per color has to track its count's share, which is why
       // category comes from a single per-cell hash used directly against
@@ -787,10 +776,6 @@ const VELOCITY_ATTENDANCE = {
   rawMix: 0,        // "Raw mix": 0..1 — flat zone colour pulled in over the overlay blend
   edgeSoftness: 1,  // "Edge softness": 0..1 — feather across the zone boundaries
   maskSoftness: 1,  // "Mask softness": 0..1 — how softly the red background is cut out
-  // Not a studio control: how far (in velocity-pass pixels) the pass is
-  // smoothed before it is split into zones. A soft pass needs little; a
-  // sharp, high-contrast one like art1v needs this to form solid zones.
-  velocityBlur: 14,
   // The studio's colour correction (its default, not a preset).
   correction: { sat: 1.02, vib: 0.92, hl: 1.00, sh: -0.80, br: 1.00, ct: 1.15 },
   mood: { r: 1, g: 1, b: 1, mix: 0 }  // "None"
@@ -870,10 +855,7 @@ class VelocitySampler {
       const bitmap = await createImageBitmap(video, {
         resizeWidth: VELOCITY_HIST_W,
         resizeHeight: VELOCITY_HIST_H,
-        // "high" averages each ~15 px block rather than point-sampling it,
-        // so the histogram sees roughly the same smoothed tones the shader
-        // colours (see uVelocityBlur) and zone areas still follow shares.
-        resizeQuality: "high"
+        resizeQuality: "low"
       });
       if (this.stopped) {
         bitmap.close();
@@ -960,7 +942,6 @@ class LivingGarden {
         uVelocity: { value: null },
         uHasVelocity: { value: 0 },
         uHueMode: { value: 0 },
-        uVelocityBlur: { value: VELOCITY_ATTENDANCE.velocityBlur },
         uZoneB1: { value: 0.33 },
         uZoneB2: { value: 0.66 },
         uZoneSoft: { value: 0.01 },
