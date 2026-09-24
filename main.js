@@ -461,11 +461,11 @@ const GARDEN_FRAG = /* glsl */`
 
   // Two-pass arts (see ART_OPTIONS.velocityVideoId): uMap is a grayscale
   // render and uVelocity its matching velocity pass — white is fast, black
-  // is slow, pure red is empty background. With a grayscale source there is
-  // no native colour to rotate, so the data's colour is applied outright and
-  // the velocity pass decides where it glows. uHueMode says the data source
-  // is driving colour through uHueShift at all (weather), since 0 turns is a
-  // real colour (red) here rather than "leave the source alone".
+  // is slow, pure red is empty background. Its black / grey / white tones
+  // each carry a data colour, composited over the render (velocityZones).
+  // uHueMode says the data source is driving colour through uHueShift at
+  // all (weather), since 0 turns is a real colour (red) here rather than
+  // "leave the source alone".
   uniform sampler2D uVelocity;
   uniform float uHasVelocity;
   uniform float uHueMode;
@@ -577,10 +577,27 @@ const GARDEN_FRAG = /* glsl */`
     return amount >= 0.0 ? c + (1.0 - c) * amount : c * (1.0 + amount);
   }
 
+  // The velocity pass, lightly blurred: its fine grain would otherwise
+  // break the zone edges into speckle rather than a smooth blend.
+  vec3 sampleVelocity(vec2 uv){
+    vec2 px = 2.0 / uVideoResolution;
+    vec3 v = texture2D(uVelocity, uv).rgb * 0.4;
+    v += texture2D(uVelocity, uv + vec2(px.x, 0.0)).rgb * 0.15;
+    v += texture2D(uVelocity, uv - vec2(px.x, 0.0)).rgb * 0.15;
+    v += texture2D(uVelocity, uv + vec2(0.0, px.y)).rgb * 0.15;
+    v += texture2D(uVelocity, uv - vec2(0.0, px.y)).rgb * 0.15;
+    return v;
+  }
+
   // m: the grayscale render, v: its velocity pass. Both are sampled as raw
   // sRGB (THREE doesn't linearise a VideoTexture for a ShaderMaterial), the
   // same space the studio worked in, so its thresholds carry over as-is.
-  vec3 velocityAttendance(vec3 m, vec3 v){
+  //
+  // The velocity pass's three tones each get a colour — cSlow on black,
+  // cMid on grey, cFast on white — split at uZoneB1/uZoneB2 and blended
+  // over the render. force floods the whole cloth one colour (attendance's
+  // dominant share); pass vec4(0) to disable.
+  vec3 velocityZones(vec3 m, vec3 v, vec3 cSlow, vec3 cMid, vec3 cFast, vec4 force){
     // Red background → keep the render untouched.
     float maskFactor = 1.0;
     if (v.g < uStudioMask.z && v.b < uStudioMask.z) {
@@ -596,8 +613,8 @@ const GARDEN_FRAG = /* glsl */`
     if (uZoneEmpty.z > 0.5) t2 = 0.0;
     if (uZoneEmpty.y > 0.5) t1 = 0.0;
 
-    vec3 c = mix(mix(uZoneAbsent, uZoneLate, t1), uZonePresent, t2);
-    c = mix(c, uZoneForce.rgb, uZoneForce.a);
+    vec3 c = mix(mix(cSlow, cMid, t1), cFast, t2);
+    c = mix(c, force.rgb, force.a);
 
     // Overlay keeps the render's own shading under the zone colour; raw mix
     // pulls the flat colour back in, more so where the render is near
@@ -636,24 +653,20 @@ const GARDEN_FRAG = /* glsl */`
     vec2 safeUv = clamp(mediaUv, 0.0, 1.0);
     vec3 normalCol = texture2D(uMap, safeUv).rgb;
 
-    // velocity: 0 (still) .. 1 (fastest). cloth: 1 on the render itself, 0 on
-    // the red background around it — an exact, per-frame mask, so colour never
-    // spills onto the white display-case frame. (g+b)/2 reads the grey level
-    // and is ~0 on the red background, so the background also counts as still.
-    float velocity = 0.0;
-    float cloth = 0.0;
-    if (uHasVelocity > 0.5) {
-      vec3 vs = texture2D(uVelocity, safeUv).rgb;
-      float redness = vs.r - max(vs.g, vs.b);
-      cloth = 1.0 - smoothstep(0.25, 0.55, redness);
-      velocity = clamp((vs.g + vs.b) * 0.5, 0.0, 1.0);
-    }
-    // Slow areas sit a little deeper, fast ones glow — the "energy" layer.
-    float energy = mix(0.78, 1.28, velocity);
-
     vec3 tintedCol;
-    if (uAttendanceMix > 0.5 && uHasVelocity > 0.5) {
-      tintedCol = velocityAttendance(normalCol, texture2D(uVelocity, safeUv).rgb);
+    if (uHasVelocity > 0.5 && uAttendanceMix > 0.5) {
+      // Attendance: absent on black, late on grey, present on white.
+      tintedCol = velocityZones(normalCol, sampleVelocity(safeUv),
+        uZoneAbsent, uZoneLate, uZonePresent, uZoneForce);
+    } else if (uHasVelocity > 0.5 && uHueMode > 0.5) {
+      // Temperature: its colour on black (a deep shade) and grey (the colour
+      // itself), white left white. uHueShift is the data's absolute hue here
+      // — nativeHue is 0 for these arts — and eases between readings. The
+      // white is a light grey rather than 1.0: overlaid on the render, pure
+      // white flattens it to paper, where this lifts it and keeps the folds.
+      float h = fract(uHueShift);
+      tintedCol = velocityZones(normalCol, sampleVelocity(safeUv),
+        hsv2rgb(vec3(h, 1.0, 0.5)), hsv2rgb(vec3(h, 1.0, 0.85)), vec3(0.72), vec4(0.0));
     } else if (uAttendanceMix > 0.5) {
       // Coverage per color has to track its count's share, which is why
       // category comes from a single per-cell hash used directly against
@@ -719,14 +732,6 @@ const GARDEN_FRAG = /* glsl */`
       float insideMask = innerFade.x * innerFade.y;
 
       tintedCol = mix(normalCol, attendanceCol, insideMask);
-    } else if (uHasVelocity > 0.5 && uHueMode > 0.5) {
-      // Colour the grayscale render outright: its brightness is the shading,
-      // uHueShift (the data's absolute hue — nativeHue is 0 for these arts)
-      // is the colour. Fast areas also desaturate slightly toward white, so
-      // they read as highlights rather than just a brighter flat colour.
-      float value = dot(normalCol, vec3(0.299, 0.587, 0.114));
-      vec3 tint = hsv2rgb(vec3(fract(uHueShift), mix(0.9, 0.6, velocity), 1.0));
-      tintedCol = mix(normalCol, value * tint * energy, cloth);
     } else if (abs(uHueShift) > 0.0001) {
       // abs(), not a plain > check: uHueShift can be negative (the 40°C+
       // magenta anchor is -0.1111, the short way around the wheel from red —
@@ -757,7 +762,8 @@ const HUE_EASE_SECONDS = 1.4;
  * themselves come from the live attendance reading, not from here.
  */
 const VELOCITY_STUDIO = {
-  colors: { absent: "#ae1e3b", late: "#0e68a0", present: "#078f05" },
+  // Same red / amber / green as the HUD's absent / late / present readout.
+  colors: { absent: "#d61a1a", late: "#e07b10", present: "#078f05" },
   strength: 1,          // 0 leaves the render untouched .. 1 full effect
   rawMix: 0,            // 0..1 — flat zone colour pulled in over the overlay blend
   edgeSoftness: 1,      // 0..1 — feather across the zone boundaries
@@ -807,6 +813,8 @@ const VELOCITY_SAMPLE_EVERY = 2;
 const VELOCITY_HIST_W = 128;
 const VELOCITY_HIST_H = 72;
 const VELOCITY_HIST_BINS = 128;
+/** Redness (0..255, r - max(g, b)) above which a velocity-pass pixel is background, not cloth. */
+const VELOCITY_BG_REDNESS = 80;
 const velocityHistCanvas = document.createElement("canvas");
 velocityHistCanvas.width = VELOCITY_HIST_W;
 velocityHistCanvas.height = VELOCITY_HIST_H;
@@ -873,12 +881,22 @@ class VelocitySampler {
       bitmap.close();
       const px = velocityHistCtx.getImageData(0, 0, VELOCITY_HIST_W, VELOCITY_HIST_H).data;
 
+      // Only the cloth counts. The red background reads as velocity 0 and
+      // is a third or more of the frame, so counting it would pile every
+      // quantile up at 0 — absent's zone collapsed onto the background
+      // (which the shader masks out anyway) and present flooded the cloth.
       const hist = this.hist;
       hist.fill(0);
+      let total = 0;
       for (let i = 0; i < px.length; i += 4) {
-        const lum = (px[i + 1] + px[i + 2]) / 510;
+        const r = px[i], g = px[i + 1], b = px[i + 2];
+        if (r - Math.max(g, b) > VELOCITY_BG_REDNESS) continue;
+        const lum = (g + b) / 510;
         hist[Math.min(VELOCITY_HIST_BINS - 1, (lum * VELOCITY_HIST_BINS) | 0)] += 1;
+        total++;
       }
+      if (total === 0) return;
+      this.total = total;
       this.version++;
     } catch {
       // Frame not readable yet (mid-seek, or torn down) — the next one will be.
@@ -1052,21 +1070,24 @@ class LivingGarden {
   }
 
   /**
-   * Places the attendance zones for a two-pass art, as the VelocityMap
-   * Studio does: each fresh velocity histogram moves the boundaries 15% of
-   * the way toward its quantiles, so they don't flicker frame to frame.
+   * Places the black / grey / white zones for a two-pass art, as the
+   * VelocityMap Studio does: each fresh velocity histogram moves the
+   * boundaries 15% of the way toward its quantiles, so they don't flicker
+   * frame to frame. Attendance sizes each zone by its share of the
+   * headcount; temperature splits the cloth into even thirds.
    */
   updateVelocityZones() {
     const u = this.material.uniforms;
     const sampler = this.velocitySampler;
     if (!sampler) return;
-    sampler.active = u.uAttendanceMix.value > 0.5;
+    const attendance = u.uAttendanceMix.value > 0.5;
+    sampler.active = attendance || u.uHueMode.value > 0.5;
     if (!sampler.active) return;
     sampler.tick();
 
     const shares = u.uAttendanceShares.value;
-    const present = shares.x;
-    const absent = shares.y;
+    const present = attendance ? shares.x : 1 / 3;
+    const absent = attendance ? shares.y : 1 / 3;
     const late = Math.max(0, 1 - present - absent);
     const noA = absent <= 0.001, noL = late <= 0.001, noP = present <= 0.001;
 
@@ -1089,8 +1110,8 @@ class LivingGarden {
     const minZone = Math.max(0.001, Math.min(b1, b2 - b1, 1 - b2));
     u.uZoneB1.value = b1;
     u.uZoneB2.value = b2;
-    const edgeSoft = 0.004 + this.studio.edgeSoftness * 0.08;
-    u.uZoneSoft.value = Math.max(0.0015, Math.min(edgeSoft, minZone * 0.25));
+    const edgeSoft = 0.004 + this.studio.edgeSoftness * 0.12;
+    u.uZoneSoft.value = Math.max(0.0015, Math.min(edgeSoft, minZone * 0.4));
     u.uZoneEmpty.value.set(noA ? 1 : 0, noL ? 1 : 0, noP ? 1 : 0);
 
     // A share at 80%+ starts flooding the whole cloth its colour (fully at
@@ -1098,7 +1119,8 @@ class LivingGarden {
     const soft = (p) => clamp((p - 0.8) / 0.2, 0, 1);
     const force = u.uZoneForce.value;
     const rgb = this.studioRgb;
-    if (soft(present) > 0) force.set(...rgb.present, soft(present));
+    if (!attendance) force.set(0, 0, 0, 0);
+    else if (soft(present) > 0) force.set(...rgb.present, soft(present));
     else if (soft(late) > 0) force.set(...rgb.late, soft(late));
     else if (absent >= 0.995) force.set(...rgb.absent, 1);
     else force.set(0, 0, 0, 0);
@@ -1352,7 +1374,7 @@ async function loadGardenVideoTexture(url) {
    To add an art option: give it an id in ART_OPTIONS, add its video
    id to VIDEO_PATHS below AND to VIDEO_KEYS in api/_r2.js so the
    presigner will sign it. A two-pass art (grayscale render + velocity
-   pass, like art4) also names its velocity clip as velocityVideoId,
+   pass) also names its velocity clip as velocityVideoId,
    registered the same way. To add a data source: give it an id in
    DATA_SOURCES, point it at an endpoint (proxied server-side if it
    needs a key — see /api/wind), and write apply(). No engine code
@@ -1377,13 +1399,7 @@ const R2_PUBLIC_BASE = "";
 
 /** Must mirror VIDEO_KEYS in api/_r2.js — that file is the security boundary. */
 const VIDEO_PATHS = {
-  art1: "flight-simulation/4k_render_final_001.mp4",
-  art2: "flight-simulation/2kwithoutflowers.mp4",
-  art3: "flight-simulation/grayscale_vide01.mp4",
-  art3v: "flight-simulation/greyscale_velocity.mp4",
-  art4: "flight-simulation/render001.mp4",
-  art4v: "flight-simulation/playbalst3.mp4",
-  art5: "flight-simulation/art.mp4"
+  art1: "flight-simulation/4k_render_final_001.mp4"
 };
 
 /**
@@ -1569,17 +1585,13 @@ const ART_OPTIONS = {
   // is what pulls it out of the general pool the gate offers under
   // Weather/Attendance (see the general-pool filter in renderGateArtColumn).
   // nativeHue represents the art's baseline hue on the color wheel (0 = Red, 1/3 = Green 120°).
-  art1: { name: "DEFAULT ART", blurb: "The original flight-garden render", videoId: "art1", exclusiveTo: "flight", nativeHue: 0 },
-  art2: { name: "ART 1", blurb: "The bare garden, without its flowers", videoId: "art2", nativeHue: 1 / 3 },
-  // art3 and art4 are two-pass arts: a grayscale render plus its velocity
-  // pass (velocityVideoId).
-  // With no colour of its own to rotate, the data source's colour is applied
-  // outright and the velocity pass decides where it glows — see uVelocity in
-  // GARDEN_FRAG. nativeHue stays 0 so setHue hands the shader the data's
-  // absolute hue.
-  art3: { name: "ART 2", blurb: "Grayscale render, coloured by data and motion", videoId: "art3", velocityVideoId: "art3v", nativeHue: 0 },
-  art4: { name: "ART 3", blurb: "Grayscale render, coloured by data and motion", videoId: "art4", velocityVideoId: "art4v", nativeHue: 0 },
-  art5: { name: "ART 4", blurb: "A new garden render", videoId: "art5", nativeHue: 1 / 3 }
+  art1: { name: "DEFAULT ART", blurb: "The original flight-garden render", videoId: "art1", exclusiveTo: "flight", nativeHue: 0 }
+  // Weather/Attendance have no art of their own until new renders are added
+  // here. A two-pass art (grayscale render + velocity pass) also sets
+  // velocityVideoId and nativeHue: 0 — attendance then paints absent / late /
+  // present on the velocity pass's black / grey / white, and temperature its
+  // colour on black and grey with white left white (velocityZones in
+  // GARDEN_FRAG).
 };
 
 /**
@@ -4244,6 +4256,9 @@ function renderGateArtColumn() {
   if (!ui.gateArtOptions) return;
 
   const fixedArtId = DATA_SOURCES[gateDataId]?.fixedArtId;
+  const pool = generalArtIds();
+  // Nothing to generate with until this data source has an art to run on.
+  if (ui.gateGenerateBtn) ui.gateGenerateBtn.disabled = !fixedArtId && pool.length === 0;
   if (fixedArtId) {
     gateArtId = fixedArtId;
     const art = ART_OPTIONS[fixedArtId];
@@ -4261,7 +4276,11 @@ function renderGateArtColumn() {
     return;
   }
 
-  const pool = generalArtIds();
+  if (pool.length === 0) {
+    gateArtId = null;
+    ui.gateArtOptions.innerHTML = `<p class="gate-option-empty">No art available for this data yet.</p>`;
+    return;
+  }
   if (!pool.includes(gateArtId)) gateArtId = pool[0];
   buildGateColumn(ui.gateArtOptions, pool, ART_OPTIONS, (id) => {
     gateArtId = id;

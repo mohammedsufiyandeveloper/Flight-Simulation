@@ -110,20 +110,6 @@ function presignR2Get(env, key, expiresInSeconds = 6 * 60 * 60) {
 const VIDEO_KEYS = {
   // Fixed to the Flight data source — nothing else ever requests this id.
   art1: 'flight-simulation/4k_render_final_001.mp4',
-
-  // The general-purpose pool Weather/Attendance pick from. art2's key keeps
-  // its original upload name (2kwithoutflowers.mp4) rather than being
-  // re-uploaded under a new one — same bytes, just a different id pointing
-  // at them.
-  art2: 'flight-simulation/2kwithoutflowers.mp4',
-  // art3 and art4 are two-pass arts: a grayscale render plus the matching
-  // velocity pass (art3v / art4v) the shader colours it by. Keys keep the
-  // files' original render names, same as art2.
-  art3: 'flight-simulation/grayscale_vide01.mp4',
-  art3v: 'flight-simulation/greyscale_velocity.mp4',
-  art4: 'flight-simulation/render001.mp4',
-  art4v: 'flight-simulation/playbalst3.mp4',
-  art5: 'flight-simulation/art.mp4',
 };
 
 const DEFAULT_VIDEO_ID = 'art1';
