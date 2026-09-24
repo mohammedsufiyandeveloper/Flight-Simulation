@@ -1475,9 +1475,9 @@ async function fetchReading(endpoint) {
 
 /**
  * The attendance scene's feed — present/absent/late headcounts from
- * trava-app. Same shape of proxy as fetchReading/api/wind.js: the trava-app
+ * the Tusker management API. Same shape of proxy as fetchReading/api/wind.js: the Tusker
  * API key never reaches the browser, /api/attendance reads it server-side
- * from TRAVA_ATTENDANCE_API_KEY.
+ * from TUSKER_ATTENDANCE_API_KEY.
  */
 async function fetchAttendanceReading(endpoint) {
   const res = await fetch(endpoint);

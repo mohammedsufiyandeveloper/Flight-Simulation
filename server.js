@@ -74,19 +74,19 @@ async function handleWindRequest(res, locationId) {
 }
 
 /**
- * Local-dev twin of api/attendance.js — proxies trava-app's attendance
+ * Local-dev twin of api/attendance.js — proxies Tusker's attendance
  * headcounts so its API key stays server-side during `npm start` too.
  */
 async function handleAttendanceRequest(res) {
-  const base = process.env.TRAVA_ATTENDANCE_API_URL || env.TRAVA_ATTENDANCE_API_URL;
-  const workspaceId = process.env.TRAVA_ATTENDANCE_WORKSPACE_ID || env.TRAVA_ATTENDANCE_WORKSPACE_ID;
+  const base = process.env.TUSKER_ATTENDANCE_API_URL || env.TUSKER_ATTENDANCE_API_URL;
+  const workspaceId = process.env.TUSKER_ATTENDANCE_WORKSPACE_ID || env.TUSKER_ATTENDANCE_WORKSPACE_ID;
   if (!base || !workspaceId) {
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'TRAVA_ATTENDANCE_API_URL / TRAVA_ATTENDANCE_WORKSPACE_ID not configured' }));
+    res.end(JSON.stringify({ error: 'TUSKER_ATTENDANCE_API_URL / TUSKER_ATTENDANCE_WORKSPACE_ID not configured' }));
     return;
   }
 
-  const key = process.env.TRAVA_ATTENDANCE_API_KEY || env.TRAVA_ATTENDANCE_API_KEY;
+  const key = process.env.TUSKER_ATTENDANCE_API_KEY || env.TUSKER_ATTENDANCE_API_KEY;
 
   try {
     const url = `${base}?workspaceId=${encodeURIComponent(workspaceId)}`;
@@ -95,7 +95,7 @@ async function handleAttendanceRequest(res) {
     });
     const body = await apiRes.json();
     if (!apiRes.ok || !body.success) {
-      throw new Error(body.error || `trava-app → HTTP ${apiRes.status}`);
+      throw new Error(body.error || `Tusker → HTTP ${apiRes.status}`);
     }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({ present: body.data.present, absent: body.data.absent, late: body.data.late }));
