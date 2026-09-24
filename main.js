@@ -1658,11 +1658,15 @@ const DATA_SOURCES = {
     tintMode: "attendance",
     flights: false,
     apply(reading, ctx) {
-      const total = reading.present + reading.absent + reading.late;
+      // Tusker's `present` already includes the late arrivals (`late` is that
+      // subset), so the colour zones split it back into on time / late /
+      // absent — three groups that partition the whole cloth.
+      const onTime = Math.max(0, reading.present - reading.late);
+      const total = onTime + reading.late + reading.absent;
       if (total > 0) {
-        ctx.setAttendanceShares(reading.present / total, reading.absent / total);
+        ctx.setAttendanceShares(onTime / total, reading.absent / total);
       }
-      const band = labelForAttendance(reading);
+      const band = labelForAttendance({ present: onTime, absent: reading.absent, late: reading.late });
 
       return { present: reading.present, absent: reading.absent, late: reading.late, band };
     },

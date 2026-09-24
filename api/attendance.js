@@ -35,7 +35,7 @@ module.exports = async (req, res) => {
     }
     res.setHeader("Cache-Control", "no-store");
 
-    // Tusker nests the counts under `data`; halfDay/onLeave count toward
+    // Tusker nests the counts under `data` (present includes late); halfDay/onLeave count toward
     // neither present, absent nor late, so they're left out of this reading.
     res.status(200).json({
       present: body.data.present,
