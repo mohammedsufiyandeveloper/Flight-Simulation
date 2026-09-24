@@ -1569,7 +1569,7 @@ async function fetchAttendanceReading(endpoint) {
 // live response where `present` includes the late subset.
 const STATIC_ATTENDANCE_READING = Object.freeze({
   present: 20,
-  late: 10,
+  late: 20,
   absent: 15,
   presentIncludesLate: false
 });
