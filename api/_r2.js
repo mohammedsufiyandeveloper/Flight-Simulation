@@ -116,14 +116,14 @@ const VIDEO_KEYS = {
   // re-uploaded under a new one — same bytes, just a different id pointing
   // at them.
   art2: 'flight-simulation/2kwithoutflowers.mp4',
-  art3: 'flight-simulation/ART3.mp4',
-  // art4 is a two-pass art: its grayscale render plus the matching velocity
-  // pass (art4v) the shader colours it by. Keys keep the files' original
-  // render names, same as art2.
+  // art3 and art4 are two-pass arts: a grayscale render plus the matching
+  // velocity pass (art3v / art4v) the shader colours it by. Keys keep the
+  // files' original render names, same as art2.
+  art3: 'flight-simulation/grayscale_vide01.mp4',
+  art3v: 'flight-simulation/greyscale_velocity.mp4',
   art4: 'flight-simulation/render001.mp4',
   art4v: 'flight-simulation/playbalst3.mp4',
   art5: 'flight-simulation/art.mp4',
-  art6: 'flight-simulation/vid.mp4',
 };
 
 const DEFAULT_VIDEO_ID = 'art1';

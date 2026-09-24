@@ -1342,7 +1342,7 @@ async function loadGardenVideoTexture(url) {
    currently up, through the generic ctx handed to apply().
 
    One pairing is fixed rather than free: the Flight data source only
-   ever makes sense over ART 1 — the butterflies land on that render's
+   ever makes sense over the default art (art1) — the butterflies land on that render's
    own terminal blooms, so DATA_SOURCES.flight.fixedArtId locks the
    gate's art column to it (see renderGateArtColumn), and
    ART_OPTIONS.art1's exclusiveTo marks it out of the general pool
@@ -1379,11 +1379,11 @@ const R2_PUBLIC_BASE = "";
 const VIDEO_PATHS = {
   art1: "flight-simulation/4k_render_final_001.mp4",
   art2: "flight-simulation/2kwithoutflowers.mp4",
-  art3: "flight-simulation/ART3.mp4",
+  art3: "flight-simulation/grayscale_vide01.mp4",
+  art3v: "flight-simulation/greyscale_velocity.mp4",
   art4: "flight-simulation/render001.mp4",
   art4v: "flight-simulation/playbalst3.mp4",
-  art5: "flight-simulation/art.mp4",
-  art6: "flight-simulation/vid.mp4"
+  art5: "flight-simulation/art.mp4"
 };
 
 /**
@@ -1569,17 +1569,17 @@ const ART_OPTIONS = {
   // is what pulls it out of the general pool the gate offers under
   // Weather/Attendance (see the general-pool filter in renderGateArtColumn).
   // nativeHue represents the art's baseline hue on the color wheel (0 = Red, 1/3 = Green 120°).
-  art1: { name: "ART 1", blurb: "The original flight-garden render", videoId: "art1", exclusiveTo: "flight", nativeHue: 0 },
-  art2: { name: "ART 2", blurb: "The bare garden, without its flowers", videoId: "art2", nativeHue: 1 / 3 },
-  art3: { name: "ART 3", blurb: "A third garden render", videoId: "art3", nativeHue: 1 / 3 },
-  // Two-pass art: a grayscale render plus its velocity pass (velocityVideoId).
+  art1: { name: "DEFAULT ART", blurb: "The original flight-garden render", videoId: "art1", exclusiveTo: "flight", nativeHue: 0 },
+  art2: { name: "ART 1", blurb: "The bare garden, without its flowers", videoId: "art2", nativeHue: 1 / 3 },
+  // art3 and art4 are two-pass arts: a grayscale render plus its velocity
+  // pass (velocityVideoId).
   // With no colour of its own to rotate, the data source's colour is applied
   // outright and the velocity pass decides where it glows — see uVelocity in
   // GARDEN_FRAG. nativeHue stays 0 so setHue hands the shader the data's
   // absolute hue.
-  art4: { name: "ART 4", blurb: "Grayscale render, coloured by data and motion", videoId: "art4", velocityVideoId: "art4v", nativeHue: 0 },
-  art5: { name: "ART 5", blurb: "A new garden render", videoId: "art5", nativeHue: 1 / 3 },
-  art6: { name: "ART 6", blurb: "A new garden render", videoId: "art6", nativeHue: 1 / 3 }
+  art3: { name: "ART 2", blurb: "Grayscale render, coloured by data and motion", videoId: "art3", velocityVideoId: "art3v", nativeHue: 0 },
+  art4: { name: "ART 3", blurb: "Grayscale render, coloured by data and motion", videoId: "art4", velocityVideoId: "art4v", nativeHue: 0 },
+  art5: { name: "ART 4", blurb: "A new garden render", videoId: "art5", nativeHue: 1 / 3 }
 };
 
 /**
@@ -1608,7 +1608,7 @@ const DATA_SOURCES = {
     pollMs: 5 * 60 * 1000,   // real-time enough without hammering the free tier
     tintMode: "none",
     flights: true,
-    // Butterflies land on ART 1's own terminal blooms — no other render has
+    // Butterflies land on the default art's own terminal blooms — no other render has
     // them, so Flight can't be paired with anything else. See
     // renderGateArtColumn, which locks the gate's art column to this id
     // whenever Flight is the chosen data source.
