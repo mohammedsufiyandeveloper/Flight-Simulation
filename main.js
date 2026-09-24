@@ -432,6 +432,8 @@ const GARDEN_FRAG = /* glsl */`
   precision highp float;
 
   uniform sampler2D uMap;
+  uniform sampler2D uMapB;
+  uniform float uCrossfade;
   uniform vec2  uSize;            // plane size in world units
   uniform float uTime;
   uniform float uMaster;          // global intro reveal
@@ -451,7 +453,8 @@ const GARDEN_FRAG = /* glsl */`
   uniform float uSharpenAmount;    // 0 off (mobile) .. ~0.3 (desktop) — counters bilinear softening
   uniform float uHueShift;         // 0..1 turns around the color wheel; 0 leaves the source (red) untouched
 
-  // Attendance scene only: paints present/absent/late as green/red/orange
+  // Attendance scene only: paints present/absent/late with the configured
+  // Pakistan-green/blood-red/orange palette.
   // blotches sized by their share of the total, instead of one blended hue,
   // so all three colors stay visibly distinct. uAttendanceMix is 0 for every
   // other scene, leaving uHueShift in charge as before.
@@ -467,6 +470,7 @@ const GARDEN_FRAG = /* glsl */`
   // all (weather), since 0 turns is a real colour (red) here rather than
   // "leave the source alone".
   uniform sampler2D uVelocity;
+  uniform sampler2D uVelocityB;
   uniform float uHasVelocity;
   uniform float uHueMode;
 
@@ -659,23 +663,37 @@ const GARDEN_FRAG = /* glsl */`
                       * step(mediaUv.x, 1.0) * step(mediaUv.y, 1.0);
 
     vec2 safeUv = clamp(mediaUv, 0.0, 1.0);
-    vec3 normalCol = texture2D(uMap, safeUv).rgb;
-    // Two-pass arts are 1080p renders shown larger than native on the
-    // plane, so their fine folds read soft; sampleSharp (at full strength,
-    // scaled by uSharpenAmount's ~0.3 desktop default) restores them.
+    vec3 normalCol = mix(
+      texture2D(uMap, safeUv).rgb,
+      texture2D(uMapB, safeUv).rgb,
+      uCrossfade
+    );
+    // Keep the optional sharpen path for alternate two-pass profiles. The
+    // studio-matched attendance profile sets uSharpenAmount to zero so its
+    // correction stage receives the same source pixels as the standalone.
     if (uHasVelocity > 0.5) {
-      vec3 sharp = sampleSharp(uMap, safeUv, 1.0 / uVideoResolution);
+      vec3 sharp = mix(
+        sampleSharp(uMap, safeUv, 1.0 / uVideoResolution),
+        sampleSharp(uMapB, safeUv, 1.0 / uVideoResolution),
+        uCrossfade
+      );
       normalCol = clamp(mix(normalCol, sharp, uSharpenAmount / 0.28), 0.0, 1.0);
     }
 
+    vec3 velocityCol = mix(
+      texture2D(uVelocity, safeUv).rgb,
+      texture2D(uVelocityB, safeUv).rgb,
+      uCrossfade
+    );
+
     vec3 tintedCol;
     if (uHasVelocity > 0.5 && uAttendanceMix > 0.5) {
-      tintedCol = velocityAttendance(normalCol, texture2D(uVelocity, safeUv).rgb);
+      tintedCol = velocityAttendance(normalCol, velocityCol);
     } else if (uHasVelocity > 0.5 && uHueMode > 0.5) {
       // uHueShift is the temperature's absolute hue here — nativeHue is 0
       // for these arts — and eases between readings.
       vec3 tempCol = hsv2rgb(vec3(fract(uHueShift), 0.95, 1.0));
-      tintedCol = velocityTemperature(normalCol, texture2D(uVelocity, safeUv).rgb, tempCol);
+      tintedCol = velocityTemperature(normalCol, velocityCol, tempCol);
     } else if (uAttendanceMix > 0.5) {
       // Coverage per color has to track its count's share, which is why
       // category comes from a single per-cell hash used directly against
@@ -767,18 +785,18 @@ const HUE_EASE_SECONDS = 1.4;
 
 /**
  * The look of a two-pass art under attendance data — the VelocityMap
- * Studio's controls (velocitymapping.html) at its defaults. The zone
+ * Studio's controls (velocitymapping.html) in the shown setup. The zone
  * shares themselves come from the live attendance reading, not from here.
  */
 const VELOCITY_ATTENDANCE = {
-  // Same green / red / orange as the HUD's present / absent / late readout.
-  colors: { absent: "#d61a1a", late: "#e07b10", present: "#078f05" },
+  // Exact VelocityMap Studio palette shown in velocitymapping.html.
+  colors: { absent: "#780606", late: "#E86100", present: "#0D330E" },
   strength: 1,      // "Mix strength": 0 leaves the render untouched .. 1 full effect
   rawMix: 0,        // "Raw mix": 0..1 — flat zone colour pulled in over the overlay blend
   edgeSoftness: 1,  // "Edge softness": 0..1 — feather across the zone boundaries
   maskSoftness: 1,  // "Mask softness": 0..1 — how softly the red background is cut out
-  // The studio's colour correction (its default, not a preset).
-  correction: { sat: 1.02, vib: 0.92, hl: 1.00, sh: -0.80, br: 1.00, ct: 1.15 },
+  // The studio colour correction shown in the reference setup.
+  correction: { sat: 1.02, vib: 0.92, hl: 0.40, sh: 0.20, br: 1.00, ct: 1.15 },
   mood: { r: 1, g: 1, b: 1, mix: 0 }  // "None"
 };
 
@@ -798,8 +816,6 @@ const VELOCITY_SAMPLE_EVERY = 2;
 const VELOCITY_HIST_W = 128;
 const VELOCITY_HIST_H = 72;
 const VELOCITY_HIST_BINS = 128;
-/** Redness (0..255, r - max(g, b)) above which a velocity-pass pixel is background, not cloth. */
-const VELOCITY_BG_REDNESS = 80;
 const velocityHistCanvas = document.createElement("canvas");
 velocityHistCanvas.width = VELOCITY_HIST_W;
 velocityHistCanvas.height = VELOCITY_HIST_H;
@@ -866,22 +882,18 @@ class VelocitySampler {
       bitmap.close();
       const px = velocityHistCtx.getImageData(0, 0, VELOCITY_HIST_W, VELOCITY_HIST_H).data;
 
-      // Only the cloth counts. The red background reads as velocity 0 and
-      // is a third or more of the frame, so counting it would pile every
-      // quantile up at 0 — absent's zone collapsed onto the background
-      // (which the shader masks out anyway) and present flooded the cloth.
+      // Match the standalone studio exactly: its "% of velocity pixels"
+      // histogram includes the complete velocity frame. The red background
+      // contributes its low luminance here, then the shader's separate red
+      // mask removes colour from it.
       const hist = this.hist;
       hist.fill(0);
-      let total = 0;
       for (let i = 0; i < px.length; i += 4) {
-        const r = px[i], g = px[i + 1], b = px[i + 2];
-        if (r - Math.max(g, b) > VELOCITY_BG_REDNESS) continue;
+        const g = px[i + 1], b = px[i + 2];
         const lum = (g + b) / 510;
         hist[Math.min(VELOCITY_HIST_BINS - 1, (lum * VELOCITY_HIST_BINS) | 0)] += 1;
-        total++;
       }
-      if (total === 0) return;
-      this.total = total;
+      this.total = VELOCITY_HIST_W * VELOCITY_HIST_H;
       this.version++;
     } catch {
       // Frame not readable yet (mid-seek, or torn down) — the next one will be.
@@ -924,6 +936,8 @@ class LivingGarden {
       fragmentShader: GARDEN_FRAG,
       uniforms: {
         uMap: { value: texture },
+        uMapB: { value: texture },
+        uCrossfade: { value: 0 },
         uSize: { value: new THREE.Vector2(GARDEN.width, GARDEN.height) },
         uTime: { value: 0 },
         uMaster: { value: 0 },
@@ -941,6 +955,7 @@ class LivingGarden {
         uAttendanceShares: { value: new THREE.Vector2(0, 0) },
         uGardenInner: { value: new THREE.Vector2(GARDEN.innerX, GARDEN.innerY) },
         uVelocity: { value: null },
+        uVelocityB: { value: null },
         uHasVelocity: { value: 0 },
         uHueMode: { value: 0 },
         uZoneB1: { value: 0.33 },
@@ -993,9 +1008,11 @@ class LivingGarden {
    * different aspect ratio must re-fit, or it would be stretched to the
    * outgoing one's proportions.
    */
-  setMedia(texture, mediaAspect, mediaResolution) {
+  setMedia(texture, mediaAspect, mediaResolution, secondaryTexture = texture) {
     const u = this.material.uniforms;
     u.uMap.value = texture;
+    u.uMapB.value = secondaryTexture;
+    u.uCrossfade.value = 0;
     u.uMediaAspect.value = mediaAspect;
     u.uVideoResolution.value.set(mediaResolution[0], mediaResolution[1]);
   }
@@ -1005,14 +1022,41 @@ class LivingGarden {
    * single-video art. Must share the main video's framing — it is sampled at
    * the same UV.
    */
-  setVelocity(texture, video = null) {
+  setVelocity(texture, video = null, secondaryTexture = texture) {
     const u = this.material.uniforms;
     u.uVelocity.value = texture;
+    u.uVelocityB.value = secondaryTexture;
     u.uHasVelocity.value = texture ? 1 : 0;
+    // The standalone studio samples its grayscale render directly. Disable
+    // the project's display-size sharpening for two-pass art so overlay,
+    // highlights and shadows receive the same source pixels.
+    u.uSharpenAmount.value = texture ? 0 : pickSharpenAmount(canvas.clientWidth);
     this.velocitySampler?.stop();
     this.velocitySampler = texture && video ? new VelocitySampler(video) : null;
     this.zoneSmoothed = null;
     this.zoneVersion = 0;
+  }
+
+  /**
+   * Reorders the two decoded pairs after a loop dissolve completes. Keeping
+   * both main and velocity textures in the same order prevents the colour
+   * mask from sliding onto a different frame during the transition.
+   */
+  setLoopSources(primaryMedia, secondaryMedia, primaryVelocity, secondaryVelocity) {
+    const u = this.material.uniforms;
+    u.uMap.value = primaryMedia.texture;
+    u.uMapB.value = secondaryMedia.texture;
+    u.uVelocity.value = primaryVelocity.texture;
+    u.uVelocityB.value = secondaryVelocity.texture;
+    u.uCrossfade.value = 0;
+
+    this.velocitySampler?.stop();
+    this.velocitySampler = new VelocitySampler(primaryVelocity.video);
+    this.zoneVersion = 0;
+  }
+
+  setCrossfade(amount) {
+    this.material.uniforms.uCrossfade.value = clamp(amount, 0, 1);
   }
 
   /**
@@ -1191,15 +1235,19 @@ class LivingGarden {
  * lets setGardenVideo() fall back cleanly and leave the rest of the scene
  * running.
  */
-async function loadGardenVideoTexture(url) {
+async function loadGardenVideoTexture(url, {
+  autoplay = true,
+  loop = true,
+  autoResume = autoplay
+} = {}) {
   const video = document.createElement("video");
   video.crossOrigin = "anonymous";
   video.src = url;
-  video.loop = true;
+  video.loop = loop;
   video.muted = true;
   video.defaultMuted = true;
   video.playsInline = true;
-  video.autoplay = true;
+  video.autoplay = autoplay;
   video.preload = "auto";
 
   await new Promise((resolve, reject) => {
@@ -1217,14 +1265,16 @@ async function loadGardenVideoTexture(url) {
   video.style.zIndex = "-1";
   document.body.appendChild(video);
 
-  try {
-    await video.play();
-  } catch (err) {
-    // Autoplay blocked — the texture is still valid, just paused on the
-    // first frame. Retry once the user interacts with the page.
-    const resume = () => video.play().catch(() => { });
-    window.addEventListener("pointerdown", resume, { once: true });
-    window.addEventListener("touchstart", resume, { once: true });
+  if (autoplay) {
+    try {
+      await video.play();
+    } catch (err) {
+      // Autoplay blocked — the texture is still valid, just paused on the
+      // first frame. Retry once the user interacts with the page.
+      const resume = () => video.play().catch(() => { });
+      window.addEventListener("pointerdown", resume, { once: true });
+      window.addEventListener("touchstart", resume, { once: true });
+    }
   }
 
   // Belt-and-suspenders for an uninterrupted loop: video.loop already
@@ -1238,7 +1288,7 @@ async function loadGardenVideoTexture(url) {
   // it had been left alone. Resuming is instead deferred to the
   // visibilitychange below, which fires once, at the moment it can succeed.
   video.addEventListener("pause", () => {
-    if (document.visibilityState === "visible") video.play().catch(() => { });
+    if (autoResume && document.visibilityState === "visible") video.play().catch(() => { });
   });
 
   const texture = new THREE.VideoTexture(video);
@@ -1316,7 +1366,7 @@ async function loadGardenVideoTexture(url) {
   // decode lands.
   const onVisibility = () => {
     if (document.visibilityState !== "visible") return;
-    if (video.paused) video.play().catch(() => { });
+    if (autoResume && video.paused) video.play().catch(() => { });
     frameReady = true;
     lastFrameFlag = performance.now();
   };
@@ -1340,7 +1390,14 @@ async function loadGardenVideoTexture(url) {
     texture.dispose();
   };
 
-  return { texture, video, mediaAspect, mediaResolution, dispose };
+  return {
+    texture,
+    video,
+    mediaAspect,
+    mediaResolution,
+    setAutoResume(value) { autoResume = Boolean(value); },
+    dispose
+  };
 }
 
 /* =================================================================
@@ -1507,6 +1564,20 @@ async function fetchAttendanceReading(endpoint) {
   return data;
 }
 
+// Temporary fixed reading requested for the installation preview. These are
+// three separate categories (present does not include late), unlike Tusker's
+// live response where `present` includes the late subset.
+const STATIC_ATTENDANCE_READING = Object.freeze({
+  present: 20,
+  late: 10,
+  absent: 15,
+  presentIncludesLate: false
+});
+
+async function fetchStaticAttendanceReading() {
+  return STATIC_ATTENDANCE_READING;
+}
+
 /** Which category the HUD calls out as driving the current tint. */
 function labelForAttendance({ present, absent, late }) {
   const total = present + absent + late;
@@ -1663,19 +1734,22 @@ const DATA_SOURCES = {
     blurb: "Presence colours the garden",
     titlecard: {
       kicker: "Attendance Garden",
-      line: "Live attendance, rendered as a living garden",
-      sub: "Green is present · Red is absent · Orange is late"
+      line: "Attendance, rendered as a living garden",
+      sub: "Pakistan green is present · Blood red is absent · Orange is late"
     },
     endpoint: "/api/attendance",
-    fetch: fetchAttendanceReading,
+    // Temporarily use the fixed preview counts above. Switch this back to
+    // fetchAttendanceReading when the deployed Tusker API URL is available.
+    fetch: fetchStaticAttendanceReading,
     pollMs: 5 * 60 * 1000,
     tintMode: "attendance",
     flights: false,
     apply(reading, ctx) {
-      // Tusker's `present` already includes the late arrivals (`late` is that
-      // subset), so the colour zones split it back into on time / late /
-      // absent — three groups that partition the whole cloth.
-      const onTime = Math.max(0, reading.present - reading.late);
+      // Tusker's live `present` includes late. Fixed/manual readings can mark
+      // their three counts as exclusive so each value maps to its own zone.
+      const onTime = reading.presentIncludesLate === false
+        ? reading.present
+        : Math.max(0, reading.present - reading.late);
       const total = onTime + reading.late + reading.absent;
       if (total > 0) {
         ctx.setAttendanceShares(onTime / total, reading.absent / total);
@@ -1962,6 +2036,10 @@ let currentVelocityId = null;
 /** Torn down with its main video — the velocity pass's own decoder. */
 let disposeVelocityVideo = null;
 
+/** Secondary decoder pair and loop state used by the studio-style dissolve. */
+let disposeVelocityLoop = null;
+let velocityLoop = null;
+
 /**
  * Keeping the velocity pass on the main video's frame. Two separately
  * decoded clips never stay frame-locked on their own — and these two differ
@@ -2015,6 +2093,102 @@ function slaveVelocityVideo(leaderTexture, leader, follower) {
   };
 }
 
+const VELOCITY_LOOP_FADE_SECONDS = 0.4;
+
+/**
+ * The standalone studio keeps two synchronized main/velocity decoder pairs.
+ * During the final 0.4s it starts the parked pair at frame zero and blends
+ * both main textures and both velocity textures by the same factor. Swapping
+ * the pair order after the dissolve produces a seamless loop with no black
+ * frame and no colour-mask mismatch.
+ */
+class VelocityCrossfadeLoop {
+  constructor(garden, pairA, pairB) {
+    this.garden = garden;
+    this.primary = pairA;
+    this.secondary = pairB;
+    this.rate = pairA.media.video.playbackRate || 1;
+    this.crossfading = false;
+
+    this.stopPair(this.secondary, true);
+    this.bindSources();
+  }
+
+  setPlaybackRate(rate) {
+    this.rate = rate;
+    this.primary.media.video.playbackRate = rate;
+    this.secondary.media.video.playbackRate = rate;
+  }
+
+  playPair(pair) {
+    pair.media.video.playbackRate = this.rate;
+    pair.velocity.video.playbackRate = this.rate;
+    pair.media.video.play().catch(() => { });
+    pair.velocity.video.play().catch(() => { });
+  }
+
+  stopPair(pair, reset = false) {
+    pair.media.video.pause();
+    pair.velocity.video.pause();
+    if (reset) {
+      try { pair.media.video.currentTime = 0; } catch { }
+      try { pair.velocity.video.currentTime = 0; } catch { }
+    }
+  }
+
+  bindSources() {
+    this.garden.setLoopSources(
+      this.primary.media,
+      this.secondary.media,
+      this.primary.velocity,
+      this.secondary.velocity
+    );
+    gardenVideoEl = this.primary.media.video;
+  }
+
+  update() {
+    const leader = this.primary.media.video;
+    const duration = leader.duration;
+    if (!Number.isFinite(duration) || duration <= 0) return;
+
+    const fadeDuration = Math.min(VELOCITY_LOOP_FADE_SECONDS, duration * 0.5);
+    const fadeStart = duration - fadeDuration;
+
+    if (!this.crossfading && leader.currentTime >= fadeStart) {
+      this.crossfading = true;
+      try { this.secondary.media.video.currentTime = 0; } catch { }
+      try { this.secondary.velocity.video.currentTime = 0; } catch { }
+      this.playPair(this.secondary);
+    }
+
+    if (this.crossfading) {
+      const cross = clamp((leader.currentTime - fadeStart) / fadeDuration, 0, 1);
+      this.garden.setCrossfade(cross);
+
+      if (leader.ended || leader.currentTime >= duration) {
+        const completed = this.primary;
+        this.primary = this.secondary;
+        this.secondary = completed;
+        this.crossfading = false;
+        this.stopPair(this.secondary, true);
+        this.bindSources();
+      }
+      return;
+    }
+
+    // Recover cleanly after tab suspension or an autoplay interruption.
+    if (leader.paused && !leader.ended && document.visibilityState === "visible") {
+      this.playPair(this.primary);
+    }
+  }
+
+  dispose() {
+    this.garden.setCrossfade(0);
+    this.stopPair(this.primary);
+    this.stopPair(this.secondary);
+  }
+}
+
 /**
  * Points the garden plane at `videoId`.
  *
@@ -2037,21 +2211,34 @@ async function setGardenVideo(videoId, { velocityId = null, allowFallback = true
   const hasOverride = new URLSearchParams(location.search).has("video");
   const velocityUrl = velocityId && !hasOverride ? ART.url(velocityId) : null;
 
-  // Both clips load in parallel. The velocity pass is optional: if it won't
-  // load, the art still shows (uncoloured by motion) instead of falling back.
+  // Two-pass art uses the studio's A/B decoder layout so its end can dissolve
+  // into frame zero. All four clips load in parallel; browser media caching
+  // normally lets each duplicate reuse the same response bytes.
+  const controlledPlayback = velocityUrl
+    ? { loop: false, autoResume: false }
+    : undefined;
+  const mediaPromise = loadGardenVideoTexture(url, controlledPlayback);
   const velocityPromise = velocityUrl
-    ? loadGardenVideoTexture(velocityUrl).catch((err) => {
+    ? loadGardenVideoTexture(velocityUrl, controlledPlayback).catch((err) => {
       console.warn(`[Flight Garden] velocity pass "${velocityId}" unavailable at ${velocityUrl} — showing the render without it.`, err);
       return null;
     })
+    : Promise.resolve(null);
+  const secondaryMediaPromise = velocityUrl
+    ? loadGardenVideoTexture(url, { autoplay: false, loop: false, autoResume: false }).catch(() => null)
+    : Promise.resolve(null);
+  const secondaryVelocityPromise = velocityUrl
+    ? loadGardenVideoTexture(velocityUrl, { autoplay: false, loop: false, autoResume: false }).catch(() => null)
     : Promise.resolve(null);
 
   let media;
 
   try {
-    media = await loadGardenVideoTexture(url);
+    media = await mediaPromise;
   } catch (err) {
     velocityPromise.then((v) => v?.dispose());
+    secondaryMediaPromise.then((v) => v?.dispose());
+    secondaryVelocityPromise.then((v) => v?.dispose());
     const fallback = ART.fallbackVideoId;
     if (allowFallback && fallback && fallback !== videoId) {
       console.warn(
@@ -2065,30 +2252,78 @@ async function setGardenVideo(videoId, { velocityId = null, allowFallback = true
     return false;
   }
 
-  const velocity = await velocityPromise;
+  const [velocity, secondaryMedia, secondaryVelocity] = await Promise.all([
+    velocityPromise,
+    secondaryMediaPromise,
+    secondaryVelocityPromise
+  ]);
+  const hasStudioLoop = Boolean(velocity && secondaryMedia && secondaryVelocity);
+
+  if (!hasStudioLoop) {
+    secondaryMedia?.dispose();
+    secondaryVelocity?.dispose();
+    // Degrade to the browser's normal loop if a duplicate decoder could not
+    // be created; colour mapping remains available through the primary pair.
+    media.video.loop = true;
+    media.setAutoResume(true);
+    if (velocity) velocity.video.loop = true;
+    if (velocity) velocity.setAutoResume(true);
+  }
+
   if (velocity) {
     velocity.video.currentTime = media.video.currentTime;
     slaveVelocityVideo(media.texture, media.video, velocity.video);
+  }
+  if (hasStudioLoop) {
+    secondaryVelocity.video.currentTime = secondaryMedia.video.currentTime;
+    slaveVelocityVideo(secondaryMedia.texture, secondaryMedia.video, secondaryVelocity.video);
   }
 
   // Swap first, then dispose: releasing the outgoing decoder before the new
   // texture is bound would blank the plane for a frame.
   const previousDispose = disposeGardenVideo;
   const previousVelocityDispose = disposeVelocityVideo;
+  const previousLoopDispose = disposeVelocityLoop;
 
   if (livingGarden) {
-    livingGarden.setMedia(media.texture, media.mediaAspect, media.mediaResolution);
+    livingGarden.setMedia(
+      media.texture,
+      media.mediaAspect,
+      media.mediaResolution,
+      hasStudioLoop ? secondaryMedia.texture : media.texture
+    );
   } else {
     livingGarden = new LivingGarden(media.texture, media.mediaAspect, media.mediaResolution);
   }
-  livingGarden.setVelocity(velocity?.texture ?? null, velocity?.video ?? null);
+  livingGarden.setVelocity(
+    velocity?.texture ?? null,
+    velocity?.video ?? null,
+    hasStudioLoop ? secondaryVelocity.texture : velocity?.texture ?? null
+  );
+
+  const nextVelocityLoop = hasStudioLoop
+    ? new VelocityCrossfadeLoop(
+      livingGarden,
+      { media, velocity },
+      { media: secondaryMedia, velocity: secondaryVelocity }
+    )
+    : null;
+  velocityLoop = nextVelocityLoop;
 
   gardenVideoEl = media.video;
   disposeGardenVideo = media.dispose;
   disposeVelocityVideo = velocity?.dispose ?? null;
+  disposeVelocityLoop = hasStudioLoop
+    ? () => {
+      nextVelocityLoop.dispose();
+      secondaryMedia.dispose();
+      secondaryVelocity.dispose();
+    }
+    : null;
   currentVideoId = videoId;
   currentVelocityId = velocity ? velocityId : null;
 
+  if (previousLoopDispose) previousLoopDispose();
   if (previousDispose) previousDispose();
   if (previousVelocityDispose) previousVelocityDispose();
 
@@ -2126,7 +2361,8 @@ let selectedLocationId = DEFAULT_LOCATION_ID;
 function dataContext() {
   return {
     setPlaybackRate(rate) {
-      if (gardenVideoEl) gardenVideoEl.playbackRate = rate;
+      if (velocityLoop) velocityLoop.setPlaybackRate(rate);
+      else if (gardenVideoEl) gardenVideoEl.playbackRate = rate;
     },
 
     /**
@@ -2142,7 +2378,7 @@ function dataContext() {
     },
 
     /**
-     * Sizes the shader's green/red/orange blotches to each category's share
+     * Sizes the shader's green/blood-red/orange zones to each category's share
      * of the total (see LivingGarden.setAttendanceShares).
      */
     setAttendanceShares(presentShare, absentShare) {
@@ -4554,7 +4790,10 @@ function resize() {
   motes.mat.uniforms.uScale.value = renderer.getDrawingBufferSize(_bufferSize).y * 0.5;
 
   if (livingGarden) {
-    livingGarden.material.uniforms.uSharpenAmount.value = pickSharpenAmount(canvas.clientWidth);
+    const uniforms = livingGarden.material.uniforms;
+    uniforms.uSharpenAmount.value = uniforms.uHasVelocity.value > 0.5
+      ? 0
+      : pickSharpenAmount(canvas.clientWidth);
   }
 
   labelMetricsDirty = true;   // type size changes across breakpoints
@@ -4679,6 +4918,7 @@ function animate() {
   updatePulses(dt, master);
 
   const activity = clamp(butterflies.length / 14, 0, 1);
+  velocityLoop?.update();
   livingGarden?.update(elapsed, master, activity, dt);
   updateTerminalFlowers(dt, elapsed);
 

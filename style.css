@@ -44,6 +44,9 @@
   --amber-panel: #a3620f;
   --mint-panel: #1f7a4d;
   --red-panel: #b3261e;
+  --attendance-present: #0d330e;
+  --attendance-absent: #780606;
+  --attendance-late: #e86100;
 
   --radius: 16px;
   --radius-sm: 10px;
@@ -1083,15 +1086,15 @@ body {
 }
 
 .stat[data-kind="present"] .stat-value {
-  color: var(--mint-panel);
+  color: var(--attendance-present);
 }
 
 .stat[data-kind="absent"] .stat-value {
-  color: var(--red-panel);
+  color: var(--attendance-absent);
 }
 
 .stat[data-kind="late"] .stat-value {
-  color: var(--amber-panel);
+  color: var(--attendance-late);
 }
 
 .stat-label {
